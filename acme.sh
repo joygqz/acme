@@ -316,9 +316,9 @@ list_certs() {
   fi
 
   border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
-  echo
+  printf '\n'
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
-  echo
+  printf '\n'
   printf '%s\n' "$border"
   printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
     "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
@@ -480,19 +480,17 @@ run_menu() {
   local choice=""
 
   while true; do
-    cat <<MENU
-
-${COLOR_TITLE}ACME 证书管理${COLOR_RESET}
-
-https://github.com/joygqz/acme
-
- ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
- ${COLOR_INDEX}2.${COLOR_RESET} 创建证书
- ${COLOR_INDEX}3.${COLOR_RESET} 更新证书
- ${COLOR_INDEX}4.${COLOR_RESET} 删除证书
- ${COLOR_INDEX}0.${COLOR_RESET} 退出
-
-MENU
+    printf '\n'
+    printf "%sACME 证书管理%s\n" "$COLOR_TITLE" "$COLOR_RESET"
+    printf '\n'
+    printf '%s\n' "$REPO_URL"
+    printf '\n'
+    printf " %s1.%s 查看证书\n" "$COLOR_INDEX" "$COLOR_RESET"
+    printf " %s2.%s 创建证书\n" "$COLOR_INDEX" "$COLOR_RESET"
+    printf " %s3.%s 更新证书\n" "$COLOR_INDEX" "$COLOR_RESET"
+    printf " %s4.%s 删除证书\n" "$COLOR_INDEX" "$COLOR_RESET"
+    printf " %s0.%s 退出\n" "$COLOR_INDEX" "$COLOR_RESET"
+    printf '\n'
 
     read -r -p "请输入选择 [0-4]: " choice
     case "$choice" in
