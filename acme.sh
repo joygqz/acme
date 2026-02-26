@@ -18,6 +18,7 @@ CF_Email="${CF_Email:-}"
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
+LAST_ACME_OUTPUT=""
 COLOR_RESET=""
 COLOR_TITLE=""
 COLOR_INDEX=""
@@ -170,11 +171,10 @@ prompt_install_email_if_needed() {
 run_acme_cmd() {
   local action="$1"
   shift
-  local output=""
 
-  if ! output="$("$ACME_SH" "$@" 2>&1)"; then
+  if ! LAST_ACME_OUTPUT="$("$ACME_SH" "$@" 2>&1)"; then
     err "$action 失败."
-    [[ -n "$output" ]] && err "$output"
+    [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
     return 1
   fi
 }
@@ -223,6 +223,105 @@ append_variant_flag() {
   if [[ "$cert_variant" == "ecc" ]]; then
     printf '%s\n' "--ecc"
   fi
+}
+
+try_renew_cert() {
+  local domain="$1"
+  local domain_flag="$2"
+  local use_ecc="$3"
+  local use_force="$4"
+  local -a args=( --renew "$domain_flag" "$domain" )
+
+  if [[ "$use_ecc" -eq 1 ]]; then
+    args+=( --ecc )
+  fi
+  if [[ "$use_force" -eq 1 ]]; then
+    args+=( --force )
+  fi
+
+  if LAST_ACME_OUTPUT="$("$ACME_SH" "${args[@]}" 2>&1)"; then
+    return 0
+  fi
+  return 1
+}
+
+renew_cert_with_fallback() {
+  local domain="$1"
+  local cert_variant="$2"
+  local want_ecc=0
+  local force_opt=0
+
+  [[ "$cert_variant" == "ecc" ]] && want_ecc=1
+
+  for force_opt in 1 0; do
+    if try_renew_cert "$domain" "--domain" "$want_ecc" "$force_opt"; then
+      return 0
+    fi
+  done
+  if [[ "$want_ecc" -eq 1 ]]; then
+    for force_opt in 1 0; do
+      if try_renew_cert "$domain" "--domain" 0 "$force_opt"; then
+        return 0
+      fi
+    done
+  fi
+  for force_opt in 1 0; do
+    if try_renew_cert "$domain" "-d" "$want_ecc" "$force_opt"; then
+      return 0
+    fi
+  done
+  if [[ "$want_ecc" -eq 1 ]]; then
+    for force_opt in 1 0; do
+      if try_renew_cert "$domain" "-d" 0 "$force_opt"; then
+        return 0
+      fi
+    done
+  fi
+
+  err "证书更新失败."
+  [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
+  return 1
+}
+
+try_remove_cert() {
+  local domain="$1"
+  local domain_flag="$2"
+  local use_ecc="$3"
+  local -a args=( --remove "$domain_flag" "$domain" )
+
+  if [[ "$use_ecc" -eq 1 ]]; then
+    args+=( --ecc )
+  fi
+
+  if LAST_ACME_OUTPUT="$("$ACME_SH" "${args[@]}" 2>&1)"; then
+    return 0
+  fi
+  return 1
+}
+
+remove_cert_with_fallback() {
+  local domain="$1"
+  local cert_variant="$2"
+  local want_ecc=0
+
+  [[ "$cert_variant" == "ecc" ]] && want_ecc=1
+
+  if try_remove_cert "$domain" "--domain" "$want_ecc"; then
+    return 0
+  fi
+  if [[ "$want_ecc" -eq 1 ]] && try_remove_cert "$domain" "--domain" 0; then
+    return 0
+  fi
+  if try_remove_cert "$domain" "-d" "$want_ecc"; then
+    return 0
+  fi
+  if [[ "$want_ecc" -eq 1 ]] && try_remove_cert "$domain" "-d" 0; then
+    return 0
+  fi
+
+  err "证书删除失败."
+  [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
+  return 1
 }
 
 issue_cert() {
@@ -572,8 +671,6 @@ update_cert() {
   local cert_dir=""
   local current_install_dir=""
   local answer=""
-  local variant_flag=""
-  local -a renew_args=()
   local select_rc=0
 
   if prompt_existing_cert_domain target_domain "请输入待更新域名: "; then
@@ -600,12 +697,7 @@ update_cert() {
   fi
 
   log "正在更新证书..."
-  renew_args=( --renew --domain "$target_domain" --force )
-  variant_flag="$(append_variant_flag "$cert_variant")"
-  if [[ -n "$variant_flag" ]]; then
-    renew_args+=( "$variant_flag" )
-  fi
-  run_acme_cmd "证书更新" "${renew_args[@]}"
+  renew_cert_with_fallback "$target_domain" "$cert_variant"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
   log "更新成功: $target_domain -> $cert_dir."
@@ -616,11 +708,9 @@ delete_cert() {
   local cert_variant=""
   local install_dir=""
   local cert_dir_default=""
-  local variant_flag=""
   local acme_dir_rsa=""
   local acme_dir_ecc=""
   local removed_local_dirs=0
-  local -a remove_args=()
   local select_rc=0
 
   if prompt_existing_cert_domain target_domain "请输入待删除域名: "; then
@@ -637,12 +727,7 @@ delete_cert() {
   install_dir="$(get_cert_install_dir "$target_domain")"
   cert_dir_default="/etc/ssl/$target_domain"
 
-  remove_args=( --remove --domain "$target_domain" )
-  variant_flag="$(append_variant_flag "$cert_variant")"
-  if [[ -n "$variant_flag" ]]; then
-    remove_args+=( "$variant_flag" )
-  fi
-  run_acme_cmd "证书删除" "${remove_args[@]}"
+  remove_cert_with_fallback "$target_domain" "$cert_variant"
 
   acme_dir_rsa="$ACME_HOME/$target_domain"
   acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
