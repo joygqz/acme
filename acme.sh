@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.17"
+readonly SCRIPT_VERSION="v1.0.0-beta.18"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 readonly UPDATE_CACHE_FILE="$ACME_HOME/.script_update_version"
 
@@ -37,7 +37,6 @@ LOCK_FD=""
 DIR_LOCK_DIR=""
 DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
-UPDATE_CHECKED_VERSION=""
 UPDATE_CHECK_STATUS="unchecked"
 
 curl_https() {
@@ -97,7 +96,10 @@ read_cached_update_version() {
     return 1
   fi
 
-  cached_version="$(head -n 1 "$UPDATE_CACHE_FILE" 2>/dev/null | tr -d '\r')"
+  if ! IFS= read -r cached_version < "$UPDATE_CACHE_FILE"; then
+    return 1
+  fi
+  cached_version="${cached_version%$'\r'}"
   [[ -n "$cached_version" ]] || return 1
   printf '%s\n' "$cached_version"
 }
@@ -106,11 +108,20 @@ write_cached_update_version() {
   local remote_version="$1"
 
   [[ -n "$remote_version" ]] || return
+  mkdir -p "$ACME_HOME" >/dev/null 2>&1 || true
   printf '%s\n' "$remote_version" > "$UPDATE_CACHE_FILE" 2>/dev/null || true
 }
 
 clear_cached_update_version() {
   remove_file_quietly "$UPDATE_CACHE_FILE"
+}
+
+set_update_check_state() {
+  local status="$1"
+  local available_version="${2:-}"
+
+  UPDATE_CHECK_STATUS="$status"
+  UPDATE_AVAILABLE_VERSION="$available_version"
 }
 
 is_version_newer() {
@@ -136,30 +147,24 @@ check_script_update() {
 
   if ! remote_version="$(fetch_remote_script_version)"; then
     if remote_version="$(read_cached_update_version)"; then
-      UPDATE_CHECKED_VERSION="$remote_version"
       if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
-        UPDATE_AVAILABLE_VERSION="$remote_version"
-        UPDATE_CHECK_STATUS="available"
+        set_update_check_state "available" "$remote_version"
         return
       fi
+      set_update_check_state "latest"
+      return
     fi
-    UPDATE_AVAILABLE_VERSION=""
-    UPDATE_CHECKED_VERSION=""
-    UPDATE_CHECK_STATUS="failed"
+    set_update_check_state "failed"
     return
   fi
-
-  UPDATE_CHECKED_VERSION="$remote_version"
 
   if ! is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     clear_cached_update_version
-    UPDATE_AVAILABLE_VERSION=""
-    UPDATE_CHECK_STATUS="latest"
+    set_update_check_state "latest"
     return
   fi
 
-  UPDATE_AVAILABLE_VERSION="$remote_version"
-  UPDATE_CHECK_STATUS="available"
+  set_update_check_state "available" "$remote_version"
   write_cached_update_version "$remote_version"
 }
 
@@ -1353,9 +1358,7 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     clear_cached_update_version
-    UPDATE_AVAILABLE_VERSION=""
-    UPDATE_CHECKED_VERSION="$new_version"
-    UPDATE_CHECK_STATUS="latest"
+    set_update_check_state "latest"
     if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
       log "已是最新版本: $SCRIPT_VERSION"
     else
@@ -1371,9 +1374,7 @@ update_script() {
   fi
 
   clear_cached_update_version
-  UPDATE_AVAILABLE_VERSION=""
-  UPDATE_CHECKED_VERSION=""
-  UPDATE_CHECK_STATUS="unchecked"
+  set_update_check_state "unchecked"
   log "更新成功: $SCRIPT_VERSION -> $new_version, 正在重启脚本"
   release_lock
   exec bash "$script_path"
@@ -1388,11 +1389,7 @@ print_main_menu() {
       update_label="更新脚本 最新: $UPDATE_AVAILABLE_VERSION"
       ;;
     latest)
-      if [[ -n "$UPDATE_CHECKED_VERSION" ]]; then
-        update_label="更新脚本 (已最新: $UPDATE_CHECKED_VERSION)"
-      else
-        update_label="更新脚本 (已最新)"
-      fi
+      update_label="更新脚本"
       ;;
     failed)
       update_label="更新脚本"
