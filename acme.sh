@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.34"
+readonly SCRIPT_VERSION="v1.0.0"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -82,19 +82,9 @@ fetch_remote_script_version() {
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
-  local highest=""
 
-  if [[ "$candidate" == "$baseline" ]]; then
-    return 1
-  fi
-
-  if ! command_exists sort; then
-    [[ "$candidate" > "$baseline" ]]
-    return
-  fi
-
-  highest="$(printf '%s\n%s\n' "$candidate" "$baseline" | sort -V | tail -n 1)"
-  [[ "$highest" == "$candidate" ]]
+  [[ "$candidate" != "$baseline" ]] || return 1
+  [[ "$(printf '%s\n%s\n' "$candidate" "$baseline" | sort -V | tail -n 1)" == "$candidate" ]]
 }
 
 check_script_update() {
@@ -384,10 +374,6 @@ has_ca_bundle() {
   [[ -r /etc/ssl/certs/ca-certificates.crt || -r /etc/pki/tls/certs/ca-bundle.crt ]]
 }
 
-has_systemd() {
-  command_exists systemctl && [[ -d /run/systemd/system ]]
-}
-
 warn_service_action_failed() {
   local action="$1"
   warn "无法${action}服务 ${CRON_SERVICE}, 请手动检查"
@@ -409,7 +395,7 @@ enable_non_systemd_service_autostart() {
 }
 
 ensure_cron_service_running() {
-  if has_systemd; then
+  if command_exists systemctl && [[ -d /run/systemd/system ]]; then
     if ! systemctl is-enabled "$CRON_SERVICE" >/dev/null 2>&1; then
       if ! systemctl enable "$CRON_SERVICE" >/dev/null 2>&1; then
         warn_service_action_failed "启用"
@@ -487,25 +473,6 @@ install_acme_sh() {
   ensure_default_ca
 }
 
-resolve_ca_server_url() {
-  local ca_server="$1"
-
-  case "$ca_server" in
-    letsencrypt)
-      printf '%s\n' "https://acme-v02.api.letsencrypt.org/directory"
-      ;;
-    zerossl)
-      printf '%s\n' "https://acme.zerossl.com/v2/DV90"
-      ;;
-    buypass)
-      printf '%s\n' "https://api.buypass.com/acme/directory"
-      ;;
-    *)
-      printf '%s\n' "$ca_server"
-      ;;
-  esac
-}
-
 ensure_default_ca() {
   local account_conf="$ACME_HOME/account.conf"
   local current_ca=""
@@ -516,7 +483,20 @@ ensure_default_ca() {
     current_ca="$(trim_outer_quotes "$current_ca")"
   fi
 
-  expected_ca="$(resolve_ca_server_url "$DEFAULT_CA_SERVER")"
+  case "$DEFAULT_CA_SERVER" in
+    letsencrypt)
+      expected_ca="https://acme-v02.api.letsencrypt.org/directory"
+      ;;
+    zerossl)
+      expected_ca="https://acme.zerossl.com/v2/DV90"
+      ;;
+    buypass)
+      expected_ca="https://api.buypass.com/acme/directory"
+      ;;
+    *)
+      expected_ca="$DEFAULT_CA_SERVER"
+      ;;
+  esac
 
   if [[ "$current_ca" == "$DEFAULT_CA_SERVER" || "$current_ca" == "$expected_ca" ]]; then
     return
@@ -925,7 +905,6 @@ prompt_existing_cert_domain() {
   local prompt="$2"
   local raw_list=""
   local parsed_rows=""
-  local domains=""
   local selected_domain=""
 
   raw_list="$("$ACME_SH" --list --listraw)" || return 1
@@ -936,11 +915,10 @@ prompt_existing_cert_domain() {
   fi
 
   print_cert_list "$raw_list" "$parsed_rows" || return 1
-  domains="$(printf '%s\n' "$parsed_rows" | awk -F'\t' '{print $1}')"
 
   while true; do
     selected_domain="$(prompt_domain_value "$prompt")"
-    if printf '%s\n' "$domains" | grep -Fxq -- "$selected_domain"; then
+    if get_cert_conf_file "$selected_domain" >/dev/null 2>&1; then
       printf -v "$target_var" '%s' "$selected_domain"
       return 0
     fi
@@ -1335,9 +1313,7 @@ run_menu() {
         delete_cert || true
         ;;
       5)
-        if ! update_script; then
-          return
-        fi
+        update_script || true
         ;;
       0)
         return
