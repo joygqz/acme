@@ -14,7 +14,7 @@ readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_BASE_URL="https://raw.githubusercontent.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="${SCRIPT_RAW_BASE_URL}/main/acme.sh"
 readonly SCRIPT_MAIN_COMMIT_API_URL="https://api.github.com/repos/joygqz/acme/commits/main"
-readonly SCRIPT_VERSION="v1.0.0-beta.22"
+readonly SCRIPT_VERSION="v1.0.0-beta.23"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -1390,7 +1390,7 @@ print_main_menu() {
   local update_label="更新脚本"
 
   if [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-    update_label="更新脚本 最新: $UPDATE_AVAILABLE_VERSION"
+    update_label="更新脚本 (最新: $UPDATE_AVAILABLE_VERSION)"
   fi
 
   printf '\n'
