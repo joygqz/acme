@@ -294,8 +294,30 @@ print_config_summary() {
 }
 
 list_certs() {
-  log "当前证书列表:"
-  "$ACME_SH" --list
+  local raw_list=""
+  local data_count=0
+
+  if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
+    err "$raw_list"
+    return 1
+  fi
+
+  data_count="$(printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {count++} END {print count+0}')"
+  if [[ "$data_count" -eq 0 ]]; then
+    log "暂无证书"
+    return 0
+  fi
+
+  printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
+  if command -v column >/dev/null 2>&1; then
+    printf '%s\n' "$raw_list" \
+      | awk 'NR==1 {print "No\t"$0; next} NF>0 {print (NR-1) "\t" $0}' \
+      | column -t -s $'\t'
+  else
+    printf '%s\n' "$raw_list" \
+      | awk 'NR==1 {print "No  "$0; next} NF>0 {print (NR-1) "   " $0}'
+  fi
+  log "共 $data_count 张证书"
 }
 
 create_cert() {
@@ -316,7 +338,14 @@ create_cert() {
 
 update_cert() {
   local target_domain=""
+  local cert_dir=""
+  local answer=""
+  local -a install_args=()
+
   target_domain="$(prompt_domain_value "请输入要更新的域名: ")"
+  cert_dir="/etc/ssl/$target_domain"
+  read -r -p "证书输出目录 (默认: $cert_dir): " answer
+  cert_dir="${answer:-$cert_dir}"
 
   if [[ -n "$CF_Key" && -n "$CF_Email" ]]; then
     apply_dns_credentials
@@ -324,7 +353,26 @@ update_cert() {
 
   log "开始更新证书..."
   "$ACME_SH" --renew -d "$target_domain" --force
+
+  mkdir -p "$cert_dir"
+  install_args=(
+    --install-cert
+    -d "$target_domain"
+    --key-file "$cert_dir/$target_domain.key"
+    --fullchain-file "$cert_dir/fullchain.cer"
+    --cert-file "$cert_dir/cert.cer"
+    --ca-file "$cert_dir/ca.cer"
+  )
+  if [[ -n "$RELOAD_CMD" ]]; then
+    install_args+=( --reloadcmd "$RELOAD_CMD" )
+  fi
+
+  "$ACME_SH" "${install_args[@]}"
+  chmod 600 "$cert_dir/$target_domain.key"
+  chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
+
   log "证书更新完成: $target_domain"
+  log "证书已安装到: $cert_dir"
 }
 
 delete_cert() {
