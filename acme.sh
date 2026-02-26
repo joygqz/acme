@@ -358,6 +358,17 @@ list_certs() {
   log "共 $data_count 张证书"
 }
 
+get_cert_domains() {
+  local raw_list=""
+
+  if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
+    err "$raw_list"
+    return 1
+  fi
+
+  printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {print $1}'
+}
+
 create_cert() {
   DOMAIN=""
   OUTPUT_DIR=""
@@ -415,10 +426,42 @@ update_cert() {
 
 delete_cert() {
   local target_domain=""
+  local selector=""
+  local domains=""
   local answer=""
   local cert_dir=""
 
-  target_domain="$(prompt_domain_value "请输入要删除的域名: ")"
+  list_certs || return 1
+  domains="$(get_cert_domains)" || return 1
+  if [[ -z "$domains" ]]; then
+    log "暂无可删除证书"
+    return 0
+  fi
+
+  while true; do
+    read -r -p "请输入要删除的序号或域名: " selector
+    if [[ -z "$selector" ]]; then
+      err "请输入序号或域名"
+      continue
+    fi
+
+    if [[ "$selector" =~ ^[0-9]+$ ]]; then
+      target_domain="$(printf '%s\n' "$domains" | sed -n "${selector}p")"
+      if [[ -z "$target_domain" ]]; then
+        err "无效序号: $selector"
+        continue
+      fi
+      break
+    fi
+
+    if printf '%s\n' "$domains" | grep -Fxq -- "$selector"; then
+      target_domain="$selector"
+      break
+    fi
+
+    err "未找到域名: $selector"
+  done
+
   "$ACME_SH" --remove -d "$target_domain"
   log "证书已从管理列表移除: $target_domain"
 
