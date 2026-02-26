@@ -432,6 +432,8 @@ delete_cert() {
   local domains=""
   local answer=""
   local cert_dir=""
+  local acme_dir_rsa=""
+  local acme_dir_ecc=""
 
   list_certs || return 1
   domains="$(get_cert_domains)" || return 1
@@ -471,6 +473,16 @@ delete_cert() {
 
   "$ACME_SH" --remove -d "$target_domain"
   log "证书已从管理列表移除: $target_domain"
+
+  acme_dir_rsa="$ACME_HOME/$target_domain"
+  acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
+  if [[ -d "$acme_dir_rsa" ]]; then
+    rm -rf "$acme_dir_rsa"
+  fi
+  if [[ -d "$acme_dir_ecc" ]]; then
+    rm -rf "$acme_dir_ecc"
+  fi
+  log "已清理申请缓存目录"
 
   cert_dir="/etc/ssl/$target_domain"
   if [[ -d "$cert_dir" ]]; then
