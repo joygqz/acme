@@ -468,7 +468,6 @@ extract_cert_domains() {
 
 print_cert_list() {
   local raw_list="$1"
-  local data_count=0
   local border=""
   local no=0
   local main_domain=""
@@ -486,8 +485,7 @@ print_cert_list() {
   local renew_fmt=""
   local install_dir_fmt=""
 
-  data_count="$(printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {count++} END {print count+0}')"
-  if [[ "$data_count" -eq 0 ]]; then
+  if [[ -z "$(extract_cert_domains "$raw_list")" ]]; then
     log "当前没有证书."
     return 0
   fi
@@ -545,8 +543,6 @@ print_cert_list() {
   )
 
   printf '%s\n' "$border"
-  log "证书总数: $data_count."
-  printf '\n'
 }
 
 list_certs() {
