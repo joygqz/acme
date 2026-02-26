@@ -296,6 +296,7 @@ print_config_summary() {
 list_certs() {
   local raw_list=""
   local data_count=0
+  local border=""
 
   if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
     err "$raw_list"
@@ -308,15 +309,45 @@ list_certs() {
     return 0
   fi
 
+  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
-  if command -v column >/dev/null 2>&1; then
-    printf '%s\n' "$raw_list" \
-      | awk 'NR==1 {print "No\t"$0; next} NF>0 {print (NR-1) "\t" $0}' \
-      | column -t -s $'\t'
-  else
-    printf '%s\n' "$raw_list" \
-      | awk 'NR==1 {print "No  "$0; next} NF>0 {print (NR-1) "   " $0}'
-  fi
+  printf '%s\n' "$border"
+  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
+    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
+  printf '%s\n' "$border"
+
+  printf '%s\n' "$raw_list" | awk '
+    function trunc(s, w) {
+      if (length(s) <= w) return s
+      return substr(s, 1, w - 3) "..."
+    }
+    NR == 1 { next }
+    NF > 0 {
+      n++
+      main_domain = $1
+      key_length = $2
+      san_domains = $3
+      ca = (NF >= 4 ? $4 : "-")
+      created = (NF >= 5 ? $5 : "-")
+      renew = (NF >= 6 ? $6 : "-")
+
+      gsub(/"/, "", key_length)
+      if (san_domains == "no" || san_domains == "") san_domains = "-"
+      if (ca == "") ca = "-"
+      if (created == "") created = "-"
+      if (renew == "") renew = "-"
+
+      printf "| %-2d | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n",
+        n,
+        trunc(main_domain, 25),
+        trunc(key_length, 7),
+        trunc(san_domains, 25),
+        trunc(ca, 11),
+        trunc(created, 20),
+        trunc(renew, 20)
+    }
+  '
+  printf '%s\n' "$border"
   log "共 $data_count 张证书"
 }
 
