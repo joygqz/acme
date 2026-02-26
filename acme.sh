@@ -149,10 +149,8 @@ install_acme_sh() {
     die "acme.sh 安装失败, 未找到文件: $ACME_SH"
   fi
 
-  if ! "$ACME_SH" --upgrade --auto-upgrade >/dev/null 2>&1; then
-    err "acme.sh 自动升级失败, 将继续使用当前版本"
-  fi
-  "$ACME_SH" --set-default-ca --server "$CA_SERVER" >/dev/null 2>&1 || die "设置默认 CA 失败"
+  "$ACME_SH" --upgrade --auto-upgrade
+  "$ACME_SH" --set-default-ca --server "$CA_SERVER"
 }
 
 prompt_install_email_if_needed() {
@@ -171,16 +169,6 @@ prompt_install_email_if_needed() {
       EMAIL=""
     fi
   done
-}
-
-run_acme_cmd() {
-  local action="$1"
-  shift
-
-  if ! "$ACME_SH" "$@"; then
-    err "${action}失败"
-    return 1
-  fi
 }
 
 get_cert_conf_file() {
@@ -237,23 +225,8 @@ issue_cert() {
     --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
-  local output_file=""
 
-  output_file="$(mktemp)"
-  if "$ACME_SH" "${issue_args[@]}" 2>&1 | tee "$output_file"; then
-    rm -f "$output_file"
-    return 0
-  fi
-
-  # acme.sh 在证书未到续期时间时会返回非 0, 但现有证书可继续安装到目标目录.
-  if grep -Fq "Domains not changed." "$output_file" || grep -Fq "Skipping. Next renewal time is:" "$output_file"; then
-    rm -f "$output_file"
-    return 0
-  fi
-
-  rm -f "$output_file"
-  err "证书申请失败"
-  return 1
+  "$ACME_SH" "${issue_args[@]}"
 }
 
 apply_dns_credentials() {
@@ -285,7 +258,7 @@ install_cert_to_dir() {
     install_args+=( "$variant_flag" )
   fi
 
-  run_acme_cmd "证书安装" "${install_args[@]}"
+  "$ACME_SH" "${install_args[@]}"
 
   chmod 600 "$cert_dir/$cert_domain.key"
   chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
@@ -445,15 +418,7 @@ prompt_domain_value() {
 }
 
 get_cert_list_raw() {
-  local raw_list=""
-
-  if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
-    err "读取证书列表失败"
-    [[ -n "$raw_list" ]] && err "$raw_list"
-    return 1
-  fi
-
-  printf '%s\n' "$raw_list"
+  "$ACME_SH" --list
 }
 
 extract_cert_domains() {
@@ -615,7 +580,7 @@ delete_cert() {
   if [[ -n "$variant_flag" ]]; then
     remove_args+=( "$variant_flag" )
   fi
-  run_acme_cmd "证书删除" "${remove_args[@]}"
+  "$ACME_SH" "${remove_args[@]}"
 
   acme_dir_rsa="$ACME_HOME/$target_domain"
   acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
