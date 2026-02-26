@@ -7,6 +7,7 @@ readonly CA_SERVER="letsencrypt"
 readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
+readonly REPO_URL="https://github.com/joygqz/acme"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -17,6 +18,21 @@ CF_Email="${CF_Email:-}"
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
+COLOR_RESET=""
+COLOR_TITLE=""
+COLOR_LINK=""
+COLOR_INDEX=""
+COLOR_ITEM=""
+
+init_colors() {
+  if [[ -t 1 ]]; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_TITLE=$'\033[1;36m'
+    COLOR_LINK=$'\033[1;34m'
+    COLOR_INDEX=$'\033[1;33m'
+    COLOR_ITEM=$'\033[1;32m'
+  fi
+}
 
 log() {
   echo "[$(date '+%F %T')] $*"
@@ -335,12 +351,13 @@ run_menu() {
 
   while true; do
     cat <<MENU
-请选择操作:
-1) 查看证书
-2) 创建证书
-3) 更新证书
-4) 删除证书
-0) 退出
+${COLOR_TITLE}=== ACME 证书管理 ===${COLOR_RESET}
+${COLOR_LINK}${REPO_URL}${COLOR_RESET}
+${COLOR_INDEX}1.${COLOR_RESET} ${COLOR_ITEM}查看证书${COLOR_RESET}
+${COLOR_INDEX}2.${COLOR_RESET} ${COLOR_ITEM}创建证书${COLOR_RESET}
+${COLOR_INDEX}3.${COLOR_RESET} ${COLOR_ITEM}更新证书${COLOR_RESET}
+${COLOR_INDEX}4.${COLOR_RESET} ${COLOR_ITEM}删除证书${COLOR_RESET}
+${COLOR_INDEX}0.${COLOR_RESET} ${COLOR_ITEM}退出${COLOR_RESET}
 MENU
 
     read -r -p "请输入序号: " choice
@@ -374,6 +391,7 @@ main() {
   fi
 
   require_root
+  init_colors
   detect_os
   install_deps
   prompt_install_email_if_needed
