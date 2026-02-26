@@ -10,10 +10,9 @@ readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
-readonly REPO_SLUG="joygqz/acme"
-readonly REPO_URL="https://github.com/${REPO_SLUG}"
-readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/${REPO_SLUG}/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.25"
+readonly REPO_URL="https://github.com/joygqz/acme"
+readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
+readonly SCRIPT_VERSION="v1.0.0-beta.27"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -42,13 +41,9 @@ curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
 }
 
-fetch_remote_script_stream() {
-  curl_https --retry 2 --retry-delay 1 --connect-timeout 5 --max-time 12 "$SCRIPT_RAW_URL"
-}
-
-download_remote_script_file() {
-  local output_file="$1"
-  curl_https --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 "$SCRIPT_RAW_URL" -o "$output_file"
+curl_script_raw() {
+  # 使用时间戳避免 CDN 返回旧缓存版本
+  curl_https "$@" "${SCRIPT_RAW_URL}?ts=$(date +%s)"
 }
 
 resolve_script_path() {
@@ -77,7 +72,7 @@ extract_version_from_script_file() {
 fetch_remote_script_version() {
   local remote_version=""
 
-  if ! remote_version="$(fetch_remote_script_stream 2>/dev/null | awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}')"; then
+  if ! remote_version="$(curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 5 --max-time 15 2>/dev/null | awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}')"; then
     return 1
   fi
 
@@ -106,17 +101,10 @@ is_version_newer() {
 check_script_update() {
   local remote_version=""
 
-  if ! remote_version="$(fetch_remote_script_version)"; then
-    UPDATE_AVAILABLE_VERSION=""
-    return
-  fi
-
-  if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
-    UPDATE_AVAILABLE_VERSION="$remote_version"
-    return
-  fi
-
   UPDATE_AVAILABLE_VERSION=""
+  if remote_version="$(fetch_remote_script_version)" && is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+    UPDATE_AVAILABLE_VERSION="$remote_version"
+  fi
 }
 
 get_process_start_token() {
@@ -451,14 +439,9 @@ ensure_cron_service_running() {
 
 install_deps() {
   local missing_deps=""
-  local deps_ready="0"
 
   missing_deps="$(get_missing_base_dependencies)"
   if [[ -z "$missing_deps" ]] && has_ca_bundle; then
-    deps_ready="1"
-  fi
-
-  if [[ "$deps_ready" == "1" ]]; then
     ensure_cron_service_running
     return
   fi
@@ -705,14 +688,6 @@ select_cert_variant_for_domain() {
   return 1
 }
 
-append_variant_flag() {
-  local cert_variant="$1"
-
-  if is_ecc_variant "$cert_variant"; then
-    printf '%s\n' "--ecc"
-  fi
-}
-
 key_type_to_variant() {
   local key_type="$1"
 
@@ -895,7 +870,6 @@ install_cert_to_dir() {
   local cert_domain="$1"
   local cert_dir="$2"
   local cert_variant="$3"
-  local variant_flag=""
   local -a install_args=(
     --install-cert
     --domain "$cert_domain"
@@ -910,9 +884,8 @@ install_cert_to_dir() {
   mkdir -p "$cert_dir"
   chmod 755 "$cert_dir"
 
-  variant_flag="$(append_variant_flag "$cert_variant")"
-  if [[ -n "$variant_flag" ]]; then
-    install_args+=( "$variant_flag" )
+  if is_ecc_variant "$cert_variant"; then
+    install_args+=( --ecc )
   fi
 
   "$ACME_SH" "${install_args[@]}"
@@ -1218,7 +1191,6 @@ update_cert() {
 delete_cert() {
   local target_domain=""
   local cert_variant=""
-  local variant_flag=""
   local acme_dir=""
   local -a remove_args=()
 
@@ -1227,9 +1199,8 @@ delete_cert() {
   select_cert_variant_for_domain "$target_domain" cert_variant || return 1
 
   remove_args=( --remove --domain "$target_domain" )
-  variant_flag="$(append_variant_flag "$cert_variant")"
-  if [[ -n "$variant_flag" ]]; then
-    remove_args+=( "$variant_flag" )
+  if is_ecc_variant "$cert_variant"; then
+    remove_args+=( --ecc )
   fi
   "$ACME_SH" "${remove_args[@]}"
 
@@ -1266,7 +1237,7 @@ update_script() {
     return 1
   fi
 
-  if ! download_remote_script_file "$tmp_file"; then
+  if ! curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 -o "$tmp_file"; then
     remove_file_and_error "$tmp_file" "下载更新失败"
     return 1
   fi
@@ -1324,12 +1295,7 @@ print_main_menu() {
 
 print_usage() {
   cat <<USAGE
-用法:
-  bash acme.sh
-
-说明:
-  交互式管理 Cloudflare DNS 的 ACME 证书
-  启动自动检查脚本更新, 菜单 [5] 可执行更新
+交互式管理 Cloudflare DNS 的 ACME 证书
 USAGE
 }
 
