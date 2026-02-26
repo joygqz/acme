@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.30"
+readonly SCRIPT_VERSION="v1.0.0-beta.31"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -378,7 +378,6 @@ detect_os() {
   else
     die "暂不支持该系统: ID=${os_id}, ID_LIKE=${os_like}"
   fi
-
 }
 
 has_ca_bundle() {
@@ -895,7 +894,7 @@ prompt_existing_cert_domain() {
   local domains=""
   local selected_domain=""
 
-  raw_list="$(get_cert_list_raw)" || return 1
+  raw_list="$("$ACME_SH" --list --listraw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
     log "暂无证书"
@@ -903,7 +902,7 @@ prompt_existing_cert_domain() {
   fi
 
   print_cert_list "$raw_list" "$parsed_rows" || return 1
-  domains="$(extract_cert_domains_from_rows "$parsed_rows")"
+  domains="$(printf '%s\n' "$parsed_rows" | awk -F'\t' '{print $1}')"
 
   while true; do
     selected_domain="$(prompt_domain_value "$prompt")"
@@ -977,15 +976,13 @@ prompt_inputs() {
 
   prompt_cloudflare_credentials
 
-  if [[ -z "$EMAIL" ]]; then
-    if [[ -n "$CF_Email" ]]; then
-      EMAIL="$CF_Email"
-      email_prompt="请输入 ACME 账号邮箱 (留空使用 CF_Email): "
-    else
-      email_prompt="请输入 ACME 账号邮箱 (例如: admin@example.com): "
-    fi
-  else
+  if [[ -z "$EMAIL" && -n "$CF_Email" ]]; then
+    EMAIL="$CF_Email"
+    email_prompt="请输入 ACME 账号邮箱 (留空使用 CF_Email): "
+  elif [[ -n "$EMAIL" ]]; then
     email_prompt="请输入 ACME 账号邮箱 (留空使用: $EMAIL): "
+  else
+    email_prompt="请输入 ACME 账号邮箱 (例如: admin@example.com): "
   fi
   read -r -p "$email_prompt" answer
   EMAIL="${answer:-$EMAIL}"
@@ -1017,10 +1014,6 @@ prompt_domain_value() {
     printf '%s\n' "$value"
     return
   done
-}
-
-get_cert_list_raw() {
-  "$ACME_SH" --list --listraw
 }
 
 parse_cert_list_rows() {
@@ -1055,11 +1048,6 @@ parse_cert_list_rows() {
       }
     }
   '
-}
-
-extract_cert_domains_from_rows() {
-  local parsed_rows="$1"
-  printf '%s\n' "$parsed_rows" | awk -F'\t' '{print $1}'
 }
 
 print_cert_list() {
@@ -1127,7 +1115,7 @@ print_cert_list() {
 list_certs() {
   local raw_list=""
 
-  raw_list="$(get_cert_list_raw)" || return 1
+  raw_list="$("$ACME_SH" --list --listraw)" || return 1
   print_cert_list "$raw_list"
 }
 
