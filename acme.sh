@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.18"
+readonly SCRIPT_VERSION="v1.0.0-beta.19"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 readonly UPDATE_CACHE_FILE="$ACME_HOME/.script_update_version"
 
@@ -37,10 +37,29 @@ LOCK_FD=""
 DIR_LOCK_DIR=""
 DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
-UPDATE_CHECK_STATUS="unchecked"
 
 curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
+}
+
+build_script_raw_url_with_no_cache() {
+  printf '%s?nocache=%s_%s_%s\n' "$SCRIPT_RAW_URL" "$(date +%s)" "$$" "$RANDOM"
+}
+
+fetch_remote_script_stream() {
+  curl_https --retry 2 --retry-delay 1 --connect-timeout 5 \
+    -H "Cache-Control: no-cache, no-store, max-age=0" \
+    -H "Pragma: no-cache" \
+    "$(build_script_raw_url_with_no_cache)"
+}
+
+download_remote_script_file() {
+  local output_file="$1"
+  curl_https --retry 3 --retry-delay 1 --connect-timeout 10 \
+    -H "Cache-Control: no-cache, no-store, max-age=0" \
+    -H "Pragma: no-cache" \
+    "$(build_script_raw_url_with_no_cache)" \
+    -o "$output_file"
 }
 
 resolve_script_path() {
@@ -70,7 +89,7 @@ fetch_remote_script_version() {
   local remote_version=""
 
   if ! remote_version="$(
-    curl_https --retry 2 --retry-delay 1 --connect-timeout 5 "$SCRIPT_RAW_URL" 2>/dev/null \
+    fetch_remote_script_stream 2>/dev/null \
       | awk -F'"' '
           /^readonly SCRIPT_VERSION=/ {v=$2}
           END {
@@ -116,14 +135,6 @@ clear_cached_update_version() {
   remove_file_quietly "$UPDATE_CACHE_FILE"
 }
 
-set_update_check_state() {
-  local status="$1"
-  local available_version="${2:-}"
-
-  UPDATE_CHECK_STATUS="$status"
-  UPDATE_AVAILABLE_VERSION="$available_version"
-}
-
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
@@ -145,27 +156,27 @@ is_version_newer() {
 check_script_update() {
   local remote_version=""
 
-  if ! remote_version="$(fetch_remote_script_version)"; then
-    if remote_version="$(read_cached_update_version)"; then
-      if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
-        set_update_check_state "available" "$remote_version"
-        return
-      fi
-      set_update_check_state "latest"
+  if remote_version="$(fetch_remote_script_version)"; then
+    if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+      UPDATE_AVAILABLE_VERSION="$remote_version"
+      write_cached_update_version "$remote_version"
       return
     fi
-    set_update_check_state "failed"
-    return
-  fi
 
-  if ! is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     clear_cached_update_version
-    set_update_check_state "latest"
+    UPDATE_AVAILABLE_VERSION=""
     return
   fi
 
-  set_update_check_state "available" "$remote_version"
-  write_cached_update_version "$remote_version"
+  if remote_version="$(read_cached_update_version)"; then
+    if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+      UPDATE_AVAILABLE_VERSION="$remote_version"
+      return
+    fi
+    clear_cached_update_version
+  fi
+
+  UPDATE_AVAILABLE_VERSION=""
 }
 
 get_process_start_token() {
@@ -1334,7 +1345,7 @@ update_script() {
     return 1
   fi
 
-  if ! curl_https --retry 3 --retry-delay 1 --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$tmp_file"; then
+  if ! download_remote_script_file "$tmp_file"; then
     remove_file_and_error "$tmp_file" "下载更新失败"
     return 1
   fi
@@ -1358,7 +1369,7 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     clear_cached_update_version
-    set_update_check_state "latest"
+    UPDATE_AVAILABLE_VERSION=""
     if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
       log "已是最新版本: $SCRIPT_VERSION"
     else
@@ -1374,7 +1385,7 @@ update_script() {
   fi
 
   clear_cached_update_version
-  set_update_check_state "unchecked"
+  UPDATE_AVAILABLE_VERSION=""
   log "更新成功: $SCRIPT_VERSION -> $new_version, 正在重启脚本"
   release_lock
   exec bash "$script_path"
@@ -1384,17 +1395,9 @@ update_script() {
 print_main_menu() {
   local update_label="更新脚本"
 
-  case "$UPDATE_CHECK_STATUS" in
-    available)
-      update_label="更新脚本 最新: $UPDATE_AVAILABLE_VERSION"
-      ;;
-    latest)
-      update_label="更新脚本"
-      ;;
-    failed)
-      update_label="更新脚本"
-      ;;
-  esac
+  if [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
+    update_label="更新脚本 最新: $UPDATE_AVAILABLE_VERSION"
+  fi
 
   printf '\n'
   printf '%s=== ACME 证书管理 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
