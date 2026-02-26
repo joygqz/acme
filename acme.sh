@@ -24,6 +24,7 @@ COLOR_RESET=""
 COLOR_TITLE=""
 COLOR_INDEX=""
 COLOR_ERROR=""
+COLOR_ERROR_TEXT=""
 
 init_colors() {
   if [[ "${NO_COLOR:-}" == "1" || "${NO_COLOR:-}" == "true" ]]; then
@@ -33,6 +34,7 @@ init_colors() {
   COLOR_TITLE=$'\033[1;36m'
   COLOR_INDEX=$'\033[1;36m'
   COLOR_ERROR=$'\033[1;31m'
+  COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
 log() {
@@ -41,10 +43,10 @@ log() {
 
 err() {
   if [[ -n "$COLOR_ERROR" ]]; then
-    echo "${COLOR_ERROR}ERROR: $*${COLOR_RESET}" >&2
+    echo "${COLOR_ERROR_TEXT}$*${COLOR_RESET}" >&2
     return
   fi
-  echo "ERROR: $*" >&2
+  echo "$*" >&2
 }
 
 die() {
