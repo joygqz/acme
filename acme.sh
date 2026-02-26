@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.7"
+readonly SCRIPT_VERSION="v1.0.0-beta.8"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -55,25 +55,6 @@ die() {
   exit 1
 }
 
-ensure_not_empty() {
-  local field="$1"
-  local value="$2"
-  [[ -n "$value" ]] || die "$field 不能为空"
-}
-
-ensure_valid_domain() {
-  local value="$1"
-  ensure_not_empty "域名" "$value"
-  is_valid_domain "$value" || die "域名格式错误: $value"
-}
-
-ensure_valid_email() {
-  local field="$1"
-  local value="$2"
-  ensure_not_empty "$field" "$value"
-  is_valid_email "$value" || die "$field 格式错误: $value"
-}
-
 is_valid_domain() {
   local d="$1"
   [[ "$d" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
@@ -118,21 +99,38 @@ detect_os() {
 
 }
 
+has_base_dependencies() {
+  command -v curl >/dev/null 2>&1 && \
+    command -v socat >/dev/null 2>&1 && \
+    command -v openssl >/dev/null 2>&1 && \
+    command -v crontab >/dev/null 2>&1
+}
+
+has_ca_bundle() {
+  [[ -r /etc/ssl/certs/ca-certificates.crt || -r /etc/pki/tls/certs/ca-bundle.crt ]]
+}
+
 install_deps() {
   case "$PKG_TYPE" in
     apt)
       command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令"
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update
-      apt-get install -y curl socat cron openssl ca-certificates
+      if ! has_base_dependencies || ! has_ca_bundle; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y curl socat cron openssl ca-certificates
+      fi
       ;;
     yum)
       command -v yum >/dev/null 2>&1 || die "缺少 yum 命令"
-      yum install -y curl socat cronie openssl ca-certificates
+      if ! has_base_dependencies || ! has_ca_bundle; then
+        yum install -y curl socat cronie openssl ca-certificates
+      fi
       ;;
     dnf)
       command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令"
-      dnf install -y curl socat cronie openssl ca-certificates
+      if ! has_base_dependencies || ! has_ca_bundle; then
+        dnf install -y curl socat cronie openssl ca-certificates
+      fi
       ;;
     *)
       die "未知包管理器: $PKG_TYPE"
@@ -153,7 +151,9 @@ install_acme_sh() {
     die "acme.sh 安装失败, 未找到文件: $ACME_SH"
   fi
 
-  "$ACME_SH" --upgrade --auto-upgrade
+  if [[ "${ACME_AUTO_UPGRADE:-0}" == "1" ]]; then
+    "$ACME_SH" --upgrade --auto-upgrade
+  fi
   "$ACME_SH" --set-default-ca --server "$DEFAULT_CA_SERVER"
 }
 
@@ -177,8 +177,33 @@ prompt_install_email_if_needed() {
 
 get_cert_conf_file() {
   local domain="$1"
+  local preferred_variant="${2:-}"
   local ecc_conf="$ACME_HOME/${domain}_ecc/${domain}.conf"
   local rsa_conf="$ACME_HOME/$domain/$domain.conf"
+
+  if [[ "$preferred_variant" == "ecc" ]]; then
+    if [[ -f "$ecc_conf" ]]; then
+      printf '%s\n' "$ecc_conf"
+      return 0
+    fi
+    if [[ -f "$rsa_conf" ]]; then
+      printf '%s\n' "$rsa_conf"
+      return 0
+    fi
+    return 1
+  fi
+
+  if [[ "$preferred_variant" == "rsa" ]]; then
+    if [[ -f "$rsa_conf" ]]; then
+      printf '%s\n' "$rsa_conf"
+      return 0
+    fi
+    if [[ -f "$ecc_conf" ]]; then
+      printf '%s\n' "$ecc_conf"
+      return 0
+    fi
+    return 1
+  fi
 
   if [[ -f "$ecc_conf" ]]; then
     printf '%s\n' "$ecc_conf"
@@ -197,20 +222,51 @@ read_conf_value() {
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$conf_file"
 }
 
-get_cert_variant() {
+select_cert_variant_for_domain() {
   local domain="$1"
-  local conf_file=""
+  local target_var="$2"
+  local has_ecc="0"
+  local has_rsa="0"
+  local answer=""
+  local ecc_conf="$ACME_HOME/${domain}_ecc/${domain}.conf"
+  local rsa_conf="$ACME_HOME/$domain/$domain.conf"
 
-  if conf_file="$(get_cert_conf_file "$domain")"; then
-    if [[ "$conf_file" == *"_ecc/"* ]]; then
-      printf '%s\n' "ecc"
-      return
-    fi
-    printf '%s\n' "rsa"
-    return
+  if [[ -f "$ecc_conf" ]]; then
+    has_ecc="1"
+  fi
+  if [[ -f "$rsa_conf" ]]; then
+    has_rsa="1"
   fi
 
-  printf '%s\n' "ecc"
+  if [[ "$has_ecc" == "1" && "$has_rsa" == "1" ]]; then
+    while true; do
+      read -r -p "检测到同域名存在 2 种证书, 请选择 [1] ECC, [2] RSA: " answer
+      case "$answer" in
+        1)
+          printf -v "$target_var" '%s' "ecc"
+          return 0
+          ;;
+        2)
+          printf -v "$target_var" '%s' "rsa"
+          return 0
+          ;;
+        *)
+          err "选项无效, 请重新输入"
+          ;;
+      esac
+    done
+  fi
+
+  if [[ "$has_ecc" == "1" ]]; then
+    printf -v "$target_var" '%s' "ecc"
+    return 0
+  fi
+  if [[ "$has_rsa" == "1" ]]; then
+    printf -v "$target_var" '%s' "rsa"
+    return 0
+  fi
+
+  return 1
 }
 
 append_variant_flag() {
@@ -232,96 +288,88 @@ key_type_to_variant() {
   printf '%s\n' "rsa"
 }
 
-prompt_issue_options() {
+prompt_option_with_default() {
+  local target_var="$1"
+  local prompt="$2"
+  local default_value="$3"
+  local invalid_msg="$4"
+  shift 4
+  local -a option_map=( "$@" )
+  local answer=""
+  local i=0
+
+  while true; do
+    read -r -p "$prompt" answer
+    if [[ -z "$answer" ]]; then
+      printf -v "$target_var" '%s' "$default_value"
+      return
+    fi
+
+    i=0
+    while [[ "$i" -lt "${#option_map[@]}" ]]; do
+      if [[ "$answer" == "${option_map[$i]}" ]]; then
+        printf -v "$target_var" '%s' "${option_map[$((i + 1))]}"
+        return
+      fi
+      i=$((i + 2))
+    done
+
+    err "$invalid_msg"
+  done
+}
+
+prompt_yes_no_default_no() {
+  local target_var="$1"
+  local prompt="$2"
   local answer=""
   local answer_lower=""
 
+  while true; do
+    read -r -p "$prompt" answer
+    answer_lower="${answer,,}"
+    case "$answer_lower" in
+      ""|n|no)
+        printf -v "$target_var" '%s' "0"
+        return
+        ;;
+      y|yes)
+        printf -v "$target_var" '%s' "1"
+        return
+        ;;
+      *)
+        err "请输入 y 或 n"
+        ;;
+    esac
+  done
+}
+
+prompt_issue_options() {
   ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
   ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
   ISSUE_INCLUDE_WILDCARD="0"
   ISSUE_FORCE_RENEW="0"
 
-  while true; do
-    read -r -p "密钥类型 [1] ec-256 (默认), [2] ec-384, [3] rsa-2048, [4] rsa-4096: " answer
-    case "$answer" in
-      ""|1)
-        ISSUE_KEY_TYPE="ec-256"
-        break
-        ;;
-      2)
-        ISSUE_KEY_TYPE="ec-384"
-        break
-        ;;
-      3)
-        ISSUE_KEY_TYPE="2048"
-        break
-        ;;
-      4)
-        ISSUE_KEY_TYPE="4096"
-        break
-        ;;
-      *)
-        err "密钥类型选项无效, 请重新输入"
-        ;;
-    esac
-  done
+  prompt_option_with_default \
+    ISSUE_KEY_TYPE \
+    "密钥类型 [1] ec-256 (默认), [2] ec-384, [3] rsa-2048, [4] rsa-4096: " \
+    "ec-256" \
+    "密钥类型选项无效, 请重新输入" \
+    "1" "ec-256" \
+    "2" "ec-384" \
+    "3" "2048" \
+    "4" "4096"
 
-  while true; do
-    read -r -p "CA [1] letsencrypt (默认), [2] zerossl, [3] buypass: " answer
-    case "$answer" in
-      ""|1)
-        ISSUE_CA_SERVER="letsencrypt"
-        break
-        ;;
-      2)
-        ISSUE_CA_SERVER="zerossl"
-        break
-        ;;
-      3)
-        ISSUE_CA_SERVER="buypass"
-        break
-        ;;
-      *)
-        err "CA 选项无效, 请重新输入"
-        ;;
-    esac
-  done
+  prompt_option_with_default \
+    ISSUE_CA_SERVER \
+    "CA [1] letsencrypt (默认), [2] zerossl, [3] buypass: " \
+    "letsencrypt" \
+    "CA 选项无效, 请重新输入" \
+    "1" "letsencrypt" \
+    "2" "zerossl" \
+    "3" "buypass"
 
-  while true; do
-    read -r -p "是否包含泛域名 *.$DOMAIN [y/N]: " answer
-    answer_lower="${answer,,}"
-    case "$answer_lower" in
-      ""|n|no)
-        ISSUE_INCLUDE_WILDCARD="0"
-        break
-        ;;
-      y|yes)
-        ISSUE_INCLUDE_WILDCARD="1"
-        break
-        ;;
-      *)
-        err "请输入 y 或 n"
-        ;;
-    esac
-  done
-
-  while true; do
-    read -r -p "是否强制重新签发 [y/N]: " answer
-    answer_lower="${answer,,}"
-    case "$answer_lower" in
-      ""|n|no)
-        ISSUE_FORCE_RENEW="0"
-        break
-        ;;
-      y|yes)
-        ISSUE_FORCE_RENEW="1"
-        break
-        ;;
-      *)
-        err "请输入 y 或 n"
-        ;;
-    esac
-  done
+  prompt_yes_no_default_no ISSUE_INCLUDE_WILDCARD "是否包含泛域名 *.$DOMAIN [y/N]: "
+  prompt_yes_no_default_no ISSUE_FORCE_RENEW "是否强制重新签发 [y/N]: "
 }
 
 issue_cert() {
@@ -351,7 +399,7 @@ apply_dns_credentials() {
 install_cert_to_dir() {
   local cert_domain="$1"
   local cert_dir="$2"
-  local cert_variant="${3:-$(get_cert_variant "$cert_domain")}"
+  local cert_variant="$3"
   local variant_flag=""
   local -a install_args=(
     --install-cert
@@ -361,6 +409,8 @@ install_cert_to_dir() {
     --cert-file "$cert_dir/cert.cer"
     --ca-file "$cert_dir/ca.cer"
   )
+
+  [[ -n "$cert_variant" ]] || die "证书类型不能为空"
 
   mkdir -p "$cert_dir"
 
@@ -391,7 +441,7 @@ prompt_existing_cert_domain() {
 
   domains="$(extract_cert_domains "$raw_list")"
   if [[ -z "$domains" ]]; then
-    return 3
+    return 1
   fi
 
   while true; do
@@ -433,11 +483,12 @@ truncate_text() {
 
 get_cert_install_dir() {
   local domain="$1"
+  local preferred_variant="${2:-}"
   local conf_file=""
   local cert_path=""
   local key_path=""
 
-  if ! conf_file="$(get_cert_conf_file "$domain")"; then
+  if ! conf_file="$(get_cert_conf_file "$domain" "$preferred_variant")"; then
     printf '%s\n' "-"
     return
   fi
@@ -461,30 +512,39 @@ get_cert_install_dir() {
 
 prompt_inputs() {
   local answer=""
-  local output_default=""
   local email_prompt=""
 
-  while [[ -z "$DOMAIN" ]]; do
-    read -r -p "请输入域名 (例如: example.com): " DOMAIN
-    if [[ -n "$DOMAIN" ]] && ! is_valid_domain "$DOMAIN"; then
-      err "域名格式错误: $DOMAIN"
-      DOMAIN=""
+  while true; do
+    if [[ -z "$DOMAIN" ]]; then
+      read -r -p "请输入域名 (例如: example.com): " DOMAIN
     fi
+    if is_valid_domain "$DOMAIN"; then
+      break
+    fi
+    err "域名格式错误: $DOMAIN"
+    DOMAIN=""
   done
 
-  while [[ -z "$CF_Email" ]]; do
-    read -r -p "请输入 Cloudflare 邮箱 (CF_Email): " CF_Email
-    if [[ -n "$CF_Email" ]] && ! is_valid_email "$CF_Email"; then
-      err "CF_Email 格式错误: $CF_Email"
-      CF_Email=""
+  while true; do
+    if [[ -z "$CF_Email" ]]; then
+      read -r -p "请输入 Cloudflare 邮箱 (CF_Email): " CF_Email
     fi
+    if is_valid_email "$CF_Email"; then
+      break
+    fi
+    err "CF_Email 格式错误: $CF_Email"
+    CF_Email=""
   done
 
-  while [[ -z "$CF_Key" ]]; do
-    read -r -p "请输入 Cloudflare API Key (CF_Key): " CF_Key
+  while true; do
     if [[ -z "$CF_Key" ]]; then
-      err "CF_Key 不能为空"
+      read -r -s -p "请输入 Cloudflare Global API Key (CF_Key): " CF_Key
+      printf '\n'
     fi
+    if [[ -n "$CF_Key" ]]; then
+      break
+    fi
+    err "CF_Key 不能为空"
   done
 
   if [[ -z "$EMAIL" ]]; then
@@ -499,18 +559,21 @@ prompt_inputs() {
     err "邮箱格式错误: $EMAIL"
     read -r -p "请输入 ACME 账号邮箱 (例如: admin@example.com): " EMAIL
   done
-
-  output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
-  read -r -p "请输入证书输出目录 (默认: $output_default): " answer
-  OUTPUT_DIR="${answer:-$output_default}"
 }
 
-validate_inputs() {
-  ensure_valid_domain "$DOMAIN"
-  ensure_valid_email "邮箱" "$EMAIL"
-  ensure_valid_email "CF_Email" "$CF_Email"
-  ensure_not_empty "CF_Key" "$CF_Key"
-  ensure_not_empty "证书输出目录" "$OUTPUT_DIR"
+prompt_output_dir() {
+  local answer=""
+  local output_default=""
+
+  while true; do
+    output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
+    read -r -p "请输入证书输出目录 (默认: $output_default): " answer
+    OUTPUT_DIR="${answer:-$output_default}"
+    if [[ -n "$OUTPUT_DIR" ]]; then
+      break
+    fi
+    err "证书输出目录不能为空"
+  done
 }
 
 prompt_domain_value() {
@@ -544,6 +607,7 @@ extract_cert_domains() {
 print_cert_list() {
   local raw_list="$1"
   local border=""
+  local row_variant=""
   local main_domain=""
   local key_length=""
   local san_domains=""
@@ -574,7 +638,8 @@ print_cert_list() {
   printf '%s\n' "$border"
 
   while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
-    install_dir="$(get_cert_install_dir "$main_domain")"
+    row_variant="$(key_type_to_variant "$key_length")"
+    install_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
 
     main_domain_fmt="$(truncate_text "$main_domain" 25)"
     key_length_fmt="$(truncate_text "$key_length" 7)"
@@ -632,7 +697,7 @@ create_cert() {
 
   prompt_inputs
   prompt_issue_options
-  validate_inputs
+  prompt_output_dir
 
   apply_dns_credentials
   issue_cert
@@ -648,20 +713,10 @@ update_cert() {
   local cert_dir=""
   local current_install_dir=""
   local answer=""
-  local select_rc=0
 
-  if prompt_existing_cert_domain target_domain "请输入待更换目录域名: "; then
-    :
-  else
-    select_rc=$?
-    if [[ "$select_rc" -eq 3 ]]; then
-      return 0
-    fi
-    return "$select_rc"
-  fi
-
-  cert_variant="$(get_cert_variant "$target_domain")"
-  current_install_dir="$(get_cert_install_dir "$target_domain")"
+  prompt_existing_cert_domain target_domain "请输入要更换安装目录的域名: " || return 1
+  select_cert_variant_for_domain "$target_domain" cert_variant || return 1
+  current_install_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   cert_dir="/etc/ssl/$target_domain"
   if [[ "$current_install_dir" != "-" ]]; then
     cert_dir="$current_install_dir"
@@ -677,22 +732,12 @@ delete_cert() {
   local target_domain=""
   local cert_variant=""
   local variant_flag=""
-  local acme_dir_rsa=""
-  local acme_dir_ecc=""
-  local select_rc=0
+  local acme_dir=""
   local -a remove_args=()
 
-  if prompt_existing_cert_domain target_domain "请输入待删除域名: "; then
-    :
-  else
-    select_rc=$?
-    if [[ "$select_rc" -eq 3 ]]; then
-      return 0
-    fi
-    return "$select_rc"
-  fi
+  prompt_existing_cert_domain target_domain "请输入待删除域名: " || return 1
 
-  cert_variant="$(get_cert_variant "$target_domain")"
+  select_cert_variant_for_domain "$target_domain" cert_variant || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   variant_flag="$(append_variant_flag "$cert_variant")"
@@ -701,13 +746,13 @@ delete_cert() {
   fi
   "$ACME_SH" "${remove_args[@]}"
 
-  acme_dir_rsa="$ACME_HOME/$target_domain"
-  acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
-  if [[ -d "$acme_dir_rsa" ]]; then
-    rm -rf "$acme_dir_rsa"
+  if [[ "$cert_variant" == "ecc" ]]; then
+    acme_dir="$ACME_HOME/${target_domain}_ecc"
+  else
+    acme_dir="$ACME_HOME/$target_domain"
   fi
-  if [[ -d "$acme_dir_ecc" ]]; then
-    rm -rf "$acme_dir_ecc"
+  if [[ -d "$acme_dir" ]]; then
+    rm -rf "$acme_dir"
   fi
 
   log "删除成功: $target_domain"
@@ -728,6 +773,12 @@ ${REPO_URL}
 MENU
 }
 
+run_menu_action() {
+  set +e
+  ( set -e; "$@" )
+  set -e
+}
+
 run_menu() {
   local choice=""
 
@@ -737,19 +788,18 @@ run_menu() {
     read -r -p "请输入选择 [0-4]: " choice
     case "$choice" in
       1)
-        list_certs
+        run_menu_action list_certs
         ;;
       2)
-        create_cert
+        run_menu_action create_cert
         ;;
       3)
-        update_cert
+        run_menu_action update_cert
         ;;
       4)
-        delete_cert
+        run_menu_action delete_cert
         ;;
       0)
-        log "已退出"
         return
         ;;
       *)
