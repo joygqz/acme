@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.3"
+readonly SCRIPT_VERSION="v1.0.0-beta.4"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -471,29 +471,32 @@ print_cert_list() {
   local ca=""
   local created=""
   local renew=""
+  local install_dir=""
   local main_domain_fmt=""
   local key_length_fmt=""
   local san_domains_fmt=""
   local ca_fmt=""
   local created_fmt=""
   local renew_fmt=""
+  local install_dir_fmt=""
 
   if [[ -z "$(extract_cert_domains "$raw_list")" ]]; then
     log "当前没有证书"
     return 0
   fi
 
-  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
+  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
   printf '\n'
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
   printf '\n'
   printf '%s\n' "$border"
-  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
-    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
+  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew" "Install Dir"
   printf '%s\n' "$border"
 
   while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
     no=$((no + 1))
+    install_dir="$(get_cert_install_dir "$main_domain")"
 
     main_domain_fmt="$(truncate_text "$main_domain" 25)"
     key_length_fmt="$(truncate_text "$key_length" 7)"
@@ -501,15 +504,17 @@ print_cert_list() {
     ca_fmt="$(truncate_text "$ca" 11)"
     created_fmt="$(truncate_text "$created" 20)"
     renew_fmt="$(truncate_text "$renew" 20)"
+    install_dir_fmt="$(truncate_text "$install_dir" 26)"
 
-    printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
+    printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
       "$COLOR_INDEX" "$no" "$COLOR_RESET" \
       "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
       "$ca_fmt" \
       "$created_fmt" \
-      "$renew_fmt"
+      "$renew_fmt" \
+      "$install_dir_fmt"
   done < <(
     printf '%s\n' "$raw_list" | awk '
       NR == 1 { next }
