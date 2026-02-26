@@ -23,11 +23,12 @@ COLOR_TITLE=""
 COLOR_INDEX=""
 
 init_colors() {
-  if [[ -t 1 ]]; then
-    COLOR_RESET=$'\033[0m'
-    COLOR_TITLE=$'\033[1;36m'
-    COLOR_INDEX=$'\033[1;33m'
+  if [[ "${NO_COLOR:-}" == "1" || "${NO_COLOR:-}" == "true" ]]; then
+    return
   fi
+  COLOR_RESET=$'\033[0m'
+  COLOR_TITLE=$'\033[1;36m'
+  COLOR_INDEX=$'\033[1;33m'
 }
 
 log() {
