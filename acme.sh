@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.12"
+readonly SCRIPT_VERSION="v1.0.0-beta.13"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -21,8 +21,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-}"
 CF_Key="${CF_Key:-}"
 CF_Email="${CF_Email:-}"
 CF_Token="${CF_Token:-}"
-CF_Account_ID="${CF_Account_ID:-}"
-CF_Zone_ID="${CF_Zone_ID:-}"
 ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
 ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
 ISSUE_INCLUDE_WILDCARD="0"
@@ -120,7 +118,6 @@ check_script_update() {
   fi
 
   UPDATE_AVAILABLE_VERSION="$remote_version"
-  log "发现新版本: $remote_version (当前: $SCRIPT_VERSION)"
 }
 
 get_process_start_token() {
@@ -145,13 +142,38 @@ get_process_start_token() {
   printf '\n'
 }
 
+remove_file_quietly() {
+  local file_path="$1"
+  [[ -n "$file_path" ]] || return
+  rm -f "$file_path" >/dev/null 2>&1 || true
+}
+
+remove_empty_dir_quietly() {
+  local dir_path="$1"
+  [[ -n "$dir_path" ]] || return
+  rmdir "$dir_path" >/dev/null 2>&1 || true
+}
+
+remove_dir_recursively_if_exists() {
+  local dir_path="$1"
+  [[ -d "$dir_path" ]] || return
+  rm -rf "$dir_path"
+}
+
+remove_file_and_error() {
+  local file_path="$1"
+  shift
+  remove_file_quietly "$file_path"
+  err "$*"
+}
+
 arm_dir_lock_cleanup() {
   local lock_dir="$1"
   local pid_file="$2"
 
   DIR_LOCK_DIR="$lock_dir"
   DIR_LOCK_PID_FILE="$pid_file"
-  trap 'rm -f "$DIR_LOCK_PID_FILE" >/dev/null 2>&1 || true; rmdir "$DIR_LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+  trap 'remove_file_quietly "$DIR_LOCK_PID_FILE"; remove_empty_dir_quietly "$DIR_LOCK_DIR"' EXIT
 }
 
 lock_conflict() {
@@ -202,7 +224,7 @@ acquire_lock() {
     fi
   fi
 
-  rm -f "$pid_file" >/dev/null 2>&1 || true
+  remove_file_quietly "$pid_file"
   if rmdir "$lock_dir" >/dev/null 2>&1 && mkdir "$lock_dir" 2>/dev/null; then
     self_start_token="$(get_process_start_token "$$")"
     printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
@@ -211,6 +233,26 @@ acquire_lock() {
   fi
 
   lock_conflict
+}
+
+release_lock() {
+  if [[ -n "$LOCK_FD" ]]; then
+    flock -u "$LOCK_FD" >/dev/null 2>&1 || true
+    exec {LOCK_FD}>&- || true
+    LOCK_FD=""
+  fi
+
+  if [[ -n "$DIR_LOCK_PID_FILE" ]]; then
+    remove_file_quietly "$DIR_LOCK_PID_FILE"
+    DIR_LOCK_PID_FILE=""
+  fi
+
+  if [[ -n "$DIR_LOCK_DIR" ]]; then
+    remove_empty_dir_quietly "$DIR_LOCK_DIR"
+    DIR_LOCK_DIR=""
+  fi
+
+  trap - EXIT
 }
 
 init_colors() {
@@ -252,7 +294,7 @@ get_missing_base_dependencies() {
   local -a missing=()
   local cmd=""
 
-  for cmd in curl socat openssl crontab; do
+  for cmd in curl openssl crontab; do
     if ! command_exists "$cmd"; then
       missing+=( "$cmd" )
     fi
@@ -269,6 +311,54 @@ is_valid_domain() {
 is_valid_email() {
   local e="$1"
   [[ "$e" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
+}
+
+ensure_non_empty_input() {
+  local target_var="$1"
+  local prompt="$2"
+  local empty_msg="$3"
+  local hidden="${4:-0}"
+  local value="${!target_var:-}"
+
+  while true; do
+    if [[ -z "$value" ]]; then
+      if [[ "$hidden" == "1" ]]; then
+        read -r -s -p "$prompt" value
+        printf '\n'
+      else
+        read -r -p "$prompt" value
+      fi
+    fi
+
+    if [[ -n "$value" ]]; then
+      printf -v "$target_var" '%s' "$value"
+      return
+    fi
+
+    err "$empty_msg"
+    value=""
+  done
+}
+
+ensure_valid_email_input() {
+  local target_var="$1"
+  local prompt="$2"
+  local invalid_msg="$3"
+  local value="${!target_var:-}"
+
+  while true; do
+    if [[ -z "$value" ]]; then
+      read -r -p "$prompt" value
+    fi
+
+    if is_valid_email "$value"; then
+      printf -v "$target_var" '%s' "$value"
+      return
+    fi
+
+    err "${invalid_msg}: $value"
+    value=""
+  done
 }
 
 require_root() {
@@ -313,6 +403,26 @@ has_systemd() {
   command_exists systemctl && [[ -d /run/systemd/system ]]
 }
 
+warn_service_action_failed() {
+  local action="$1"
+  warn "无法${action}服务 ${CRON_SERVICE}, 请手动检查"
+}
+
+enable_non_systemd_service_autostart() {
+  if command_exists chkconfig; then
+    if ! chkconfig "$CRON_SERVICE" on >/dev/null 2>&1; then
+      warn_service_action_failed "设置开机自启"
+    fi
+    return
+  fi
+
+  if command_exists update-rc.d; then
+    if ! update-rc.d "$CRON_SERVICE" defaults >/dev/null 2>&1; then
+      warn_service_action_failed "设置开机自启"
+    fi
+  fi
+}
+
 needs_dependency_install() {
   local missing_deps=""
 
@@ -329,38 +439,29 @@ needs_dependency_install() {
 }
 
 ensure_cron_service_running() {
-  if ! has_systemd; then
-    if command_exists service; then
-      if command_exists chkconfig; then
-        if ! chkconfig "$CRON_SERVICE" on >/dev/null 2>&1; then
-          warn "无法设置服务 ${CRON_SERVICE} 开机自启, 请手动检查"
-        fi
-      elif command_exists update-rc.d; then
-        if ! update-rc.d "$CRON_SERVICE" defaults >/dev/null 2>&1; then
-          warn "无法设置服务 ${CRON_SERVICE} 开机自启, 请手动检查"
-        fi
+  if has_systemd; then
+    if ! systemctl is-enabled "$CRON_SERVICE" >/dev/null 2>&1; then
+      if ! systemctl enable "$CRON_SERVICE" >/dev/null 2>&1; then
+        warn_service_action_failed "启用"
       fi
-
-      if ! service "$CRON_SERVICE" start >/dev/null 2>&1; then
-        warn "无法启动服务 ${CRON_SERVICE}, 请手动检查"
-      fi
-      return
     fi
 
+    if ! systemctl is-active "$CRON_SERVICE" >/dev/null 2>&1; then
+      if ! systemctl start "$CRON_SERVICE" >/dev/null 2>&1; then
+        warn_service_action_failed "启动"
+      fi
+    fi
+    return
+  fi
+
+  if ! command_exists service; then
     warn "未检测到 systemctl/service, 无法自动管理 ${CRON_SERVICE} 服务"
     return
   fi
 
-  if ! systemctl is-enabled "$CRON_SERVICE" >/dev/null 2>&1; then
-    if ! systemctl enable "$CRON_SERVICE" >/dev/null 2>&1; then
-      warn "无法启用服务 ${CRON_SERVICE}, 请手动检查"
-    fi
-  fi
-
-  if ! systemctl is-active "$CRON_SERVICE" >/dev/null 2>&1; then
-    if ! systemctl start "$CRON_SERVICE" >/dev/null 2>&1; then
-      warn "无法启动服务 ${CRON_SERVICE}, 请手动检查"
-    fi
+  enable_non_systemd_service_autostart
+  if ! service "$CRON_SERVICE" start >/dev/null 2>&1; then
+    warn_service_action_failed "启动"
   fi
 }
 
@@ -377,15 +478,11 @@ install_deps() {
       command_exists apt-get || die "缺少 apt-get 命令"
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
-      apt-get install -y --no-install-recommends curl socat cron openssl ca-certificates
+      apt-get install -y --no-install-recommends curl cron openssl ca-certificates
       ;;
-    yum)
-      command_exists yum || die "缺少 yum 命令"
-      yum install -y curl socat cronie openssl ca-certificates
-      ;;
-    dnf)
-      command_exists dnf || die "缺少 dnf 命令"
-      dnf install -y curl socat cronie openssl ca-certificates
+    yum|dnf)
+      command_exists "$PKG_TYPE" || die "缺少 ${PKG_TYPE} 命令"
+      "$PKG_TYPE" install -y curl cronie openssl ca-certificates
       ;;
     *)
       die "未知包管理器: $PKG_TYPE"
@@ -466,39 +563,30 @@ prompt_install_email_if_needed() {
     EMAIL="$CF_Email"
   fi
 
-  while true; do
-    if [[ -z "$EMAIL" ]]; then
-      read -r -p "首次安装, 请输入 ACME 邮箱: " EMAIL
-    fi
-    if is_valid_email "$EMAIL"; then
-      break
-    fi
-    err "邮箱格式错误: $EMAIL"
-    EMAIL=""
-  done
+  ensure_valid_email_input EMAIL "首次安装, 请输入 ACME 邮箱: " "邮箱格式错误"
 }
 
 get_cert_conf_file() {
   local domain="$1"
   local preferred_variant="${2:-}"
-  local ecc_conf="$ACME_HOME/${domain}_ecc/${domain}.conf"
-  local rsa_conf="$ACME_HOME/$domain/$domain.conf"
+  local variant=""
   local -a conf_candidates=()
   local conf_file=""
 
   case "$preferred_variant" in
     ecc)
-      conf_candidates=( "$ecc_conf" "$rsa_conf" )
+      conf_candidates=( "ecc" "rsa" )
       ;;
     rsa)
-      conf_candidates=( "$rsa_conf" "$ecc_conf" )
+      conf_candidates=( "rsa" "ecc" )
       ;;
     *)
-      conf_candidates=( "$ecc_conf" "$rsa_conf" )
+      conf_candidates=( "ecc" "rsa" )
       ;;
   esac
 
-  for conf_file in "${conf_candidates[@]}"; do
+  for variant in "${conf_candidates[@]}"; do
+    conf_file="$(get_cert_conf_path_by_variant "$domain" "$variant")"
     if [[ -f "$conf_file" ]]; then
       printf '%s\n' "$conf_file"
       return 0
@@ -508,26 +596,36 @@ get_cert_conf_file() {
   return 1
 }
 
+is_ecc_variant() {
+  local variant="$1"
+  [[ "$variant" == "ecc" ]]
+}
+
+variant_dir_suffix() {
+  local variant="$1"
+  if is_ecc_variant "$variant"; then
+    printf '%s\n' "_ecc"
+    return
+  fi
+  printf '%s\n' ""
+}
+
 get_cert_conf_path_by_variant() {
   local domain="$1"
   local variant="$2"
+  local suffix=""
 
-  if [[ "$variant" == "ecc" ]]; then
-    printf '%s\n' "$ACME_HOME/${domain}_ecc/${domain}.conf"
-    return
-  fi
-  printf '%s\n' "$ACME_HOME/$domain/$domain.conf"
+  suffix="$(variant_dir_suffix "$variant")"
+  printf '%s\n' "$ACME_HOME/${domain}${suffix}/${domain}.conf"
 }
 
 get_cert_dir_by_variant() {
   local domain="$1"
   local variant="$2"
+  local suffix=""
 
-  if [[ "$variant" == "ecc" ]]; then
-    printf '%s\n' "$ACME_HOME/${domain}_ecc"
-    return
-  fi
-  printf '%s\n' "$ACME_HOME/$domain"
+  suffix="$(variant_dir_suffix "$variant")"
+  printf '%s\n' "$ACME_HOME/${domain}${suffix}"
 }
 
 domain_has_existing_cert() {
@@ -548,10 +646,10 @@ cleanup_stale_domain_dirs() {
   rsa_dir="$(get_cert_dir_by_variant "$domain" "rsa")"
 
   if [[ -d "$ecc_dir" && ! -f "$ecc_conf" ]]; then
-    rm -rf "$ecc_dir"
+    remove_dir_recursively_if_exists "$ecc_dir"
   fi
   if [[ -d "$rsa_dir" && ! -f "$rsa_conf" ]]; then
-    rm -rf "$rsa_dir"
+    remove_dir_recursively_if_exists "$rsa_dir"
   fi
 }
 
@@ -561,9 +659,7 @@ cleanup_domain_variant_dir() {
   local cert_dir=""
 
   cert_dir="$(get_cert_dir_by_variant "$domain" "$variant")"
-  if [[ -d "$cert_dir" ]]; then
-    rm -rf "$cert_dir"
-  fi
+  remove_dir_recursively_if_exists "$cert_dir"
 }
 
 read_conf_value() {
@@ -625,7 +721,7 @@ select_cert_variant_for_domain() {
 append_variant_flag() {
   local cert_variant="$1"
 
-  if [[ "$cert_variant" == "ecc" ]]; then
+  if is_ecc_variant "$cert_variant"; then
     printf '%s\n' "--ecc"
   fi
 }
@@ -747,69 +843,27 @@ issue_cert() {
 
 apply_dns_credentials() {
   if [[ -n "$CF_Token" ]]; then
-    export CF_Token CF_Account_ID CF_Zone_ID
+    export CF_Token
     unset CF_Key CF_Email
     return
   fi
 
   export CF_Key CF_Email
-  unset CF_Token CF_Account_ID CF_Zone_ID
+  unset CF_Token
 }
 
 prompt_cf_token_credentials() {
-  local answer=""
-
-  while true; do
-    if [[ -z "$CF_Token" ]]; then
-      read -r -s -p "请输入 Cloudflare API Token (CF_Token): " CF_Token
-      printf '\n'
-    fi
-    if [[ -n "$CF_Token" ]]; then
-      break
-    fi
-    err "CF_Token 不能为空"
-  done
-
-  read -r -p "Cloudflare Account ID (可选, CF_Account_ID): " answer
-  if [[ -n "$answer" ]]; then
-    CF_Account_ID="$answer"
-  fi
-
-  read -r -p "Cloudflare Zone ID (可选, CF_Zone_ID): " answer
-  if [[ -n "$answer" ]]; then
-    CF_Zone_ID="$answer"
-  fi
+  ensure_non_empty_input CF_Token "请输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
 
   CF_Key=""
   CF_Email=""
 }
 
 prompt_cf_global_key_credentials() {
-  while true; do
-    if [[ -z "$CF_Email" ]]; then
-      read -r -p "请输入 Cloudflare 邮箱 (CF_Email): " CF_Email
-    fi
-    if is_valid_email "$CF_Email"; then
-      break
-    fi
-    err "CF_Email 格式错误: $CF_Email"
-    CF_Email=""
-  done
-
-  while true; do
-    if [[ -z "$CF_Key" ]]; then
-      read -r -s -p "请输入 Cloudflare Global API Key (CF_Key): " CF_Key
-      printf '\n'
-    fi
-    if [[ -n "$CF_Key" ]]; then
-      break
-    fi
-    err "CF_Key 不能为空"
-  done
+  ensure_valid_email_input CF_Email "请输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式错误"
+  ensure_non_empty_input CF_Key "请输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
 
   CF_Token=""
-  CF_Account_ID=""
-  CF_Zone_ID=""
 }
 
 prompt_cloudflare_credentials() {
@@ -839,6 +893,15 @@ prompt_cloudflare_credentials() {
   fi
 
   prompt_cf_global_key_credentials
+}
+
+reset_create_inputs() {
+  DOMAIN=""
+  OUTPUT_DIR=""
+  EMAIL=""
+  CF_Key=""
+  CF_Email=""
+  CF_Token=""
 }
 
 install_cert_to_dir() {
@@ -959,17 +1022,6 @@ prompt_inputs() {
   local answer=""
   local email_prompt=""
 
-  while true; do
-    if [[ -z "$DOMAIN" ]]; then
-      read -r -p "请输入域名 (例如: example.com): " DOMAIN
-    fi
-    if is_valid_domain "$DOMAIN"; then
-      break
-    fi
-    err "域名格式错误: $DOMAIN"
-    DOMAIN=""
-  done
-
   prompt_cloudflare_credentials
 
   if [[ -z "$EMAIL" ]]; then
@@ -984,10 +1036,7 @@ prompt_inputs() {
   fi
   read -r -p "$email_prompt" answer
   EMAIL="${answer:-$EMAIL}"
-  while ! is_valid_email "$EMAIL"; do
-    err "邮箱格式错误: $EMAIL"
-    read -r -p "请输入 ACME 账号邮箱 (例如: admin@example.com): " EMAIL
-  done
+  ensure_valid_email_input EMAIL "请输入 ACME 账号邮箱 (例如: admin@example.com): " "邮箱格式错误"
 }
 
 prompt_output_dir() {
@@ -1139,17 +1188,17 @@ list_certs() {
 create_cert() {
   local cert_variant=""
 
-  DOMAIN=""
-  OUTPUT_DIR=""
-
-  prompt_inputs
-  prompt_issue_options
-  cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
+  reset_create_inputs
+  DOMAIN="$(prompt_domain_value "请输入域名 (例如: example.com): ")"
 
   if domain_has_existing_cert "$DOMAIN"; then
     err "域名已存在证书: $DOMAIN"
     return 1
   fi
+
+  prompt_inputs
+  prompt_issue_options
+  cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
   prompt_output_dir
@@ -1205,9 +1254,7 @@ delete_cert() {
   "$ACME_SH" "${remove_args[@]}"
 
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
-  if [[ -d "$acme_dir" ]]; then
-    rm -rf "$acme_dir"
-  fi
+  remove_dir_recursively_if_exists "$acme_dir"
 
   log "删除成功: $target_domain"
 }
@@ -1240,26 +1287,28 @@ update_script() {
   fi
 
   if ! curl_https --retry 3 --retry-delay 1 --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$tmp_file"; then
-    rm -f "$tmp_file"
-    err "下载更新失败"
+    remove_file_and_error "$tmp_file" "下载更新失败"
     return 1
   fi
 
   if ! grep -q '^readonly SCRIPT_VERSION=' "$tmp_file"; then
-    rm -f "$tmp_file"
-    err "更新文件校验失败"
+    remove_file_and_error "$tmp_file" "更新文件校验失败"
+    return 1
+  fi
+
+  if ! bash -n "$tmp_file"; then
+    remove_file_and_error "$tmp_file" "更新文件语法校验失败"
     return 1
   fi
 
   new_version="$(extract_version_from_script_file "$tmp_file")"
   if [[ -z "$new_version" ]]; then
-    rm -f "$tmp_file"
-    err "无法读取新版本号"
+    remove_file_and_error "$tmp_file" "无法读取新版本号"
     return 1
   fi
 
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
-    rm -f "$tmp_file"
+    remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
     if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
       log "已是最新版本: $SCRIPT_VERSION"
@@ -1271,14 +1320,15 @@ update_script() {
 
   chmod 755 "$tmp_file"
   if ! mv "$tmp_file" "$script_path"; then
-    rm -f "$tmp_file"
-    err "写入更新失败: $script_path"
+    remove_file_and_error "$tmp_file" "写入更新失败: $script_path"
     return 1
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "更新成功: $SCRIPT_VERSION -> $new_version"
-  log "请重新运行脚本: bash $script_path"
+  log "更新成功: $SCRIPT_VERSION -> $new_version, 正在重启脚本"
+  release_lock
+  exec bash "$script_path"
+  die "脚本重启失败: $script_path"
 }
 
 print_main_menu() {
@@ -1302,12 +1352,7 @@ print_main_menu() {
 }
 
 run_menu_action() {
-  local action="$1"
-  shift
-
-  if ! "$action" "$@"; then
-    err "操作失败: $action"
-  fi
+  "$@" || true
 }
 
 print_usage() {

@@ -5,7 +5,7 @@
 ## 一键运行
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/joygqz/acme/main/acme.sh \
+curl -fsSL https://raw.githubusercontent.com/joygqz/acme/main/acme.sh -o ./acme.sh \
   && chmod +x ./acme.sh \
-  && bash ./acme.sh
+  && ./acme.sh
 ```
