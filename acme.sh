@@ -28,7 +28,7 @@ init_colors() {
   fi
   COLOR_RESET=$'\033[0m'
   COLOR_TITLE=$'\033[1;36m'
-  COLOR_INDEX=$'\033[1;33m'
+  COLOR_INDEX=$'\033[1;36m'
 }
 
 log() {
@@ -336,7 +336,6 @@ list_certs() {
   '
   printf '%s\n' "$border"
   log "共 $data_count 张证书"
-  echo
 }
 
 create_cert() {
