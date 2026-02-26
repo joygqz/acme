@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.4"
+readonly SCRIPT_VERSION="v1.0.0-beta.5"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -354,8 +354,14 @@ get_cert_install_dir() {
     return
   fi
 
-  cert_path="$(read_conf_value "$conf_file" "Le_FullchainPath")"
-  key_path="$(read_conf_value "$conf_file" "Le_KeyPath")"
+  cert_path="$(read_conf_value "$conf_file" "Le_RealFullChainPath")"
+  if [[ -z "$cert_path" ]]; then
+    cert_path="$(read_conf_value "$conf_file" "Le_FullchainPath")"
+  fi
+  key_path="$(read_conf_value "$conf_file" "Le_RealKeyPath")"
+  if [[ -z "$key_path" ]]; then
+    key_path="$(read_conf_value "$conf_file" "Le_KeyPath")"
+  fi
   cert_path="$(trim_outer_quotes "$cert_path")"
   key_path="$(trim_outer_quotes "$key_path")"
 
@@ -464,7 +470,6 @@ extract_cert_domains() {
 print_cert_list() {
   local raw_list="$1"
   local border=""
-  local no=0
   local main_domain=""
   local key_length=""
   local san_domains=""
@@ -485,17 +490,16 @@ print_cert_list() {
     return 0
   fi
 
-  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
+  border="+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
   printf '\n'
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
   printf '\n'
   printf '%s\n' "$border"
-  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
-    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew" "Install Dir"
+  printf "| %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+    "Domain" "Key" "SAN" "CA" "Created" "Renew" "Install Dir"
   printf '%s\n' "$border"
 
   while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
-    no=$((no + 1))
     install_dir="$(get_cert_install_dir "$main_domain")"
 
     main_domain_fmt="$(truncate_text "$main_domain" 25)"
@@ -506,9 +510,8 @@ print_cert_list() {
     renew_fmt="$(truncate_text "$renew" 20)"
     install_dir_fmt="$(truncate_text "$install_dir" 26)"
 
-    printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
-      "$COLOR_INDEX" "$no" "$COLOR_RESET" \
-      "$main_domain_fmt" \
+    printf "| %s%-25s%s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+      "$COLOR_INDEX" "$main_domain_fmt" "$COLOR_RESET" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
       "$ca_fmt" \
