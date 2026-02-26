@@ -357,6 +357,7 @@ list_certs() {
   '
   printf '%s\n' "$border"
   log "共 $data_count 张证书"
+  printf '\n'
 }
 
 get_cert_domains() {
