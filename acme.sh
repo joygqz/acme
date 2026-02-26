@@ -414,7 +414,8 @@ run_menu() {
 
   while true; do
     cat <<MENU
-ACME 证书管理
+
+${COLOR_TITLE}ACME 证书管理${COLOR_RESET}
 https://github.com/joygqz/acme
 
  1. 查看证书
