@@ -479,8 +479,7 @@ delete_cert() {
 print_main_menu() {
   cat <<MENU
 
-${COLOR_TITLE}ACME 证书管理${COLOR_RESET}
-
+${COLOR_TITLE}===== ACME 证书管理 =====${COLOR_RESET}
 ${REPO_URL}
 
  ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
