@@ -138,6 +138,24 @@ install_acme_sh() {
   "$ACME_SH" --set-default-ca --server "$CA_SERVER"
 }
 
+prompt_install_email_if_needed() {
+  if [[ -x "$ACME_SH" ]]; then
+    return
+  fi
+
+  if [[ -z "$EMAIL" && -n "$CF_Email" ]]; then
+    EMAIL="$CF_Email"
+  fi
+
+  while [[ -z "$EMAIL" ]]; do
+    read -r -p "首次安装需要邮箱，请输入邮箱: " EMAIL
+    if [[ -n "$EMAIL" ]] && ! is_valid_email "$EMAIL"; then
+      err "邮箱格式不正确: $EMAIL"
+      EMAIL=""
+    fi
+  done
+}
+
 issue_cert() {
   local -a issue_args=(
     --issue
@@ -232,6 +250,25 @@ validate_inputs() {
   ensure_not_empty "证书输出目录" "$OUTPUT_DIR"
 }
 
+prompt_domain_value() {
+  local prompt="$1"
+  local value=""
+
+  while true; do
+    read -r -p "$prompt" value
+    if [[ -z "$value" ]]; then
+      err "域名不能为空"
+      continue
+    fi
+    if ! is_valid_domain "$value"; then
+      err "域名格式不正确: $value"
+      continue
+    fi
+    printf '%s\n' "$value"
+    return
+  done
+}
+
 print_config_summary() {
   log "参数确认: domain=$DOMAIN, email=$EMAIL, mode=dns:$DNS_PROVIDER, key_type=$KEY_TYPE, ca=$CA_SERVER, output=$OUTPUT_DIR"
   log "参数确认: cf_email=$CF_Email"
@@ -240,26 +277,108 @@ print_config_summary() {
   fi
 }
 
+list_certs() {
+  log "当前证书列表:"
+  "$ACME_SH" --list
+}
+
+create_cert() {
+  DOMAIN=""
+  OUTPUT_DIR=""
+
+  prompt_inputs
+  validate_inputs
+  print_config_summary
+
+  apply_dns_credentials
+  issue_cert
+  install_cert
+
+  log "完成: 域名 $DOMAIN 证书申请与部署成功"
+  log "续期由 acme.sh 自动任务处理，可手动测试: $ACME_SH --cron --home $ACME_HOME"
+}
+
+update_cert() {
+  local target_domain=""
+  target_domain="$(prompt_domain_value "请输入要更新的域名: ")"
+
+  if [[ -n "$CF_Key" && -n "$CF_Email" ]]; then
+    apply_dns_credentials
+  fi
+
+  log "开始更新证书..."
+  "$ACME_SH" --renew -d "$target_domain" --force
+  log "证书更新完成: $target_domain"
+}
+
+delete_cert() {
+  local target_domain=""
+  local answer=""
+  local cert_dir=""
+
+  target_domain="$(prompt_domain_value "请输入要删除的域名: ")"
+  "$ACME_SH" --remove -d "$target_domain"
+  log "证书已从管理列表移除: $target_domain"
+
+  cert_dir="/etc/ssl/$target_domain"
+  if [[ -d "$cert_dir" ]]; then
+    read -r -p "是否删除本地证书目录 $cert_dir ? [y/N]: " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      rm -rf "$cert_dir"
+      log "已删除目录: $cert_dir"
+    fi
+  fi
+}
+
+run_menu() {
+  local choice=""
+
+  while true; do
+    cat <<MENU
+请选择操作:
+1) 查看证书
+2) 创建证书
+3) 更新证书
+4) 删除证书
+0) 退出
+MENU
+
+    read -r -p "请输入序号: " choice
+    case "$choice" in
+      1)
+        list_certs
+        ;;
+      2)
+        create_cert
+        ;;
+      3)
+        update_cert
+        ;;
+      4)
+        delete_cert
+        ;;
+      0)
+        log "已退出"
+        return
+        ;;
+      *)
+        err "无效选项: $choice"
+        ;;
+    esac
+  done
+}
+
 main() {
   if [[ "$#" -gt 0 ]]; then
     exit 1
   fi
 
-  prompt_inputs
-  validate_inputs
-  print_config_summary
   require_root
   detect_os
   install_deps
+  prompt_install_email_if_needed
   install_acme_sh
-
-  apply_dns_credentials
-  issue_cert
-
-  install_cert
-
-  log "完成: 域名 $DOMAIN 证书申请与部署成功"
-  log "续期由 acme.sh 自动任务处理，可手动测试: $ACME_SH --cron --home /root/.acme.sh"
+  run_menu
 }
 
 main "$@"
