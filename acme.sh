@@ -230,7 +230,7 @@ issue_cert() {
     --issue
     --keylength "$KEY_TYPE"
     --server "$CA_SERVER"
-    -d "$DOMAIN"
+    --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
   log "正在申请证书..."
@@ -248,7 +248,7 @@ install_cert_to_dir() {
   local variant_flag=""
   local -a install_args=(
     --install-cert
-    -d "$cert_domain"
+    --domain "$cert_domain"
     --key-file "$cert_dir/$cert_domain.key"
     --fullchain-file "$cert_dir/fullchain.cer"
     --cert-file "$cert_dir/cert.cer"
@@ -600,7 +600,7 @@ update_cert() {
   fi
 
   log "正在更新证书..."
-  renew_args=( --renew -d "$target_domain" --force )
+  renew_args=( --renew --domain "$target_domain" --force )
   variant_flag="$(append_variant_flag "$cert_variant")"
   if [[ -n "$variant_flag" ]]; then
     renew_args+=( "$variant_flag" )
@@ -637,7 +637,7 @@ delete_cert() {
   install_dir="$(get_cert_install_dir "$target_domain")"
   cert_dir_default="/etc/ssl/$target_domain"
 
-  remove_args=( --remove -d "$target_domain" )
+  remove_args=( --remove --domain "$target_domain" )
   variant_flag="$(append_variant_flag "$cert_variant")"
   if [[ -n "$variant_flag" ]]; then
     remove_args+=( "$variant_flag" )
