@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.13"
+readonly SCRIPT_VERSION="v1.0.0-beta.14"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -1387,7 +1387,9 @@ run_menu() {
         run_menu_action delete_cert
         ;;
       5)
-        run_menu_action update_script
+        if ! update_script; then
+          return
+        fi
         ;;
       0)
         return
