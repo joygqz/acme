@@ -440,10 +440,15 @@ delete_cert() {
   fi
 
   while true; do
-    read -r -p "请输入要删除的序号或域名: " selector
+    read -r -p "请输入要删除的序号或域名（输入 0 返回）: " selector
     if [[ -z "$selector" ]]; then
-      err "请输入序号或域名"
+      err "请输入序号或域名，或输入 0 返回"
       continue
+    fi
+
+    if [[ "$selector" == "0" ]]; then
+      log "已取消删除"
+      return 0
     fi
 
     if [[ "$selector" =~ ^[0-9]+$ ]]; then
@@ -479,7 +484,7 @@ delete_cert() {
 print_main_menu() {
   cat <<MENU
 
-${COLOR_TITLE}===== ACME 证书管理 =====${COLOR_RESET}
+${COLOR_TITLE}=== ACME 证书管理 ===${COLOR_RESET}
 ${REPO_URL}
 
  ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
