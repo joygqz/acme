@@ -186,7 +186,6 @@ issue_cert() {
 
 apply_dns_credentials() {
   export CF_Key CF_Email
-  log "验证信息已加载"
 }
 
 install_cert() {
@@ -285,14 +284,6 @@ prompt_domain_value() {
   done
 }
 
-print_config_summary() {
-  log "参数确认: domain=$DOMAIN, email=$EMAIL, mode=dns:$DNS_PROVIDER, key_type=$KEY_TYPE, ca=$CA_SERVER, output=$OUTPUT_DIR"
-  log "参数确认: cf_email=$CF_Email"
-  if [[ -n "$RELOAD_CMD" ]]; then
-    log "参数确认: reload_cmd=$RELOAD_CMD"
-  fi
-}
-
 list_certs() {
   local raw_list=""
   local data_count=0
@@ -357,7 +348,6 @@ create_cert() {
 
   prompt_inputs
   validate_inputs
-  print_config_summary
 
   apply_dns_credentials
   issue_cert
