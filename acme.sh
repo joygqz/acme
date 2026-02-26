@@ -13,7 +13,7 @@ readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_SLUG="joygqz/acme"
 readonly REPO_URL="https://github.com/${REPO_SLUG}"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/${REPO_SLUG}/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.24"
+readonly SCRIPT_VERSION="v1.0.0-beta.25"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -77,19 +77,7 @@ extract_version_from_script_file() {
 fetch_remote_script_version() {
   local remote_version=""
 
-  if ! remote_version="$(
-    fetch_remote_script_stream 2>/dev/null \
-      | awk -F'"' '
-          /^readonly SCRIPT_VERSION=/ {v=$2}
-          END {
-            if (v != "") {
-              print v
-            } else {
-              exit 1
-            }
-          }
-        '
-  )"; then
+  if ! remote_version="$(fetch_remote_script_stream 2>/dev/null | awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}')"; then
     return 1
   fi
 
@@ -434,21 +422,6 @@ enable_non_systemd_service_autostart() {
   fi
 }
 
-needs_dependency_install() {
-  local missing_deps=""
-
-  missing_deps="$(get_missing_base_dependencies)"
-  if [[ -n "$missing_deps" ]]; then
-    return 0
-  fi
-
-  if ! has_ca_bundle; then
-    return 0
-  fi
-
-  return 1
-}
-
 ensure_cron_service_running() {
   if has_systemd; then
     if ! systemctl is-enabled "$CRON_SERVICE" >/dev/null 2>&1; then
@@ -478,8 +451,14 @@ ensure_cron_service_running() {
 
 install_deps() {
   local missing_deps=""
+  local deps_ready="0"
 
-  if ! needs_dependency_install; then
+  missing_deps="$(get_missing_base_dependencies)"
+  if [[ -z "$missing_deps" ]] && has_ca_bundle; then
+    deps_ready="1"
+  fi
+
+  if [[ "$deps_ready" == "1" ]]; then
     ensure_cron_service_running
     return
   fi
@@ -1292,11 +1271,6 @@ update_script() {
     return 1
   fi
 
-  if ! grep -q '^readonly SCRIPT_VERSION=' "$tmp_file"; then
-    remove_file_and_error "$tmp_file" "更新文件校验失败"
-    return 1
-  fi
-
   if ! bash -n "$tmp_file"; then
     remove_file_and_error "$tmp_file" "更新文件语法校验失败"
     return 1
@@ -1311,11 +1285,7 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
-      log "已是最新版本: $SCRIPT_VERSION"
-    else
-      log "未检测到新版本"
-    fi
+    log "未检测到新版本"
     return 0
   fi
 
