@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.5"
+readonly SCRIPT_VERSION="v1.0.0-beta.6"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -355,13 +355,7 @@ get_cert_install_dir() {
   fi
 
   cert_path="$(read_conf_value "$conf_file" "Le_RealFullChainPath")"
-  if [[ -z "$cert_path" ]]; then
-    cert_path="$(read_conf_value "$conf_file" "Le_FullchainPath")"
-  fi
   key_path="$(read_conf_value "$conf_file" "Le_RealKeyPath")"
-  if [[ -z "$key_path" ]]; then
-    key_path="$(read_conf_value "$conf_file" "Le_KeyPath")"
-  fi
   cert_path="$(trim_outer_quotes "$cert_path")"
   key_path="$(trim_outer_quotes "$key_path")"
 
