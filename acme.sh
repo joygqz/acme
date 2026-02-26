@@ -8,6 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
+readonly SCRIPT_VERSION="v1.0.0"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -769,6 +770,8 @@ ${REPO_URL}
  ${COLOR_INDEX}3.${COLOR_RESET} 更新证书
  ${COLOR_INDEX}4.${COLOR_RESET} 删除证书
  ${COLOR_INDEX}0.${COLOR_RESET} 退出
+
+Version: ${SCRIPT_VERSION}
 
 MENU
 }
