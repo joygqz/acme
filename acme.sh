@@ -295,13 +295,14 @@ list_certs() {
   fi
 
   border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
+  echo
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
   printf '%s\n' "$border"
   printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
     "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
   printf '%s\n' "$border"
 
-  printf '%s\n' "$raw_list" | awk '
+  printf '%s\n' "$raw_list" | awk -v c="$COLOR_INDEX" -v r="$COLOR_RESET" '
     function trunc(s, w) {
       if (length(s) <= w) return s
       return substr(s, 1, w - 3) "..."
@@ -322,8 +323,8 @@ list_certs() {
       if (created == "") created = "-"
       if (renew == "") renew = "-"
 
-      printf "| %-2d | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n",
-        n,
+      printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n",
+        c, n, r,
         trunc(main_domain, 25),
         trunc(key_length, 7),
         trunc(san_domains, 25),
@@ -334,6 +335,7 @@ list_certs() {
   '
   printf '%s\n' "$border"
   log "共 $data_count 张证书"
+  echo
 }
 
 create_cert() {
