@@ -41,13 +41,17 @@ UPDATE_AVAILABLE_VERSION=""
 
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
+  local source_dir=""
+  local source_name=""
 
   if [[ -z "$source_path" ]]; then
     return 1
   fi
 
   if [[ "$source_path" != /* ]]; then
-    source_path="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
+    source_dir="$(cd "$(dirname "$source_path")" && pwd)" || return 1
+    source_name="$(basename "$source_path")"
+    source_path="${source_dir}/${source_name}"
   fi
 
   printf '%s\n' "$source_path"
@@ -62,14 +66,41 @@ fetch_remote_script_version() {
   local remote_version=""
 
   if ! remote_version="$(
-    curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 5 "$SCRIPT_RAW_URL" \
-      | awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}'
+    curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 5 "$SCRIPT_RAW_URL" 2>/dev/null \
+      | awk -F'"' '
+          /^readonly SCRIPT_VERSION=/ {v=$2}
+          END {
+            if (v != "") {
+              print v
+            } else {
+              exit 1
+            }
+          }
+        '
   )"; then
     return 1
   fi
 
   [[ -n "$remote_version" ]] || return 1
   printf '%s\n' "$remote_version"
+}
+
+is_version_newer() {
+  local candidate="$1"
+  local baseline="$2"
+  local highest=""
+
+  if [[ "$candidate" == "$baseline" ]]; then
+    return 1
+  fi
+
+  if ! command_exists sort; then
+    [[ "$candidate" > "$baseline" ]]
+    return
+  fi
+
+  highest="$(printf '%s\n%s\n' "$candidate" "$baseline" | sort -V | tail -n 1)"
+  [[ "$highest" == "$candidate" ]]
 }
 
 check_script_update() {
@@ -79,7 +110,7 @@ check_script_update() {
     return
   fi
 
-  if [[ "$remote_version" == "$SCRIPT_VERSION" ]]; then
+  if ! is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     UPDATE_AVAILABLE_VERSION=""
     return
   fi
@@ -1231,6 +1262,13 @@ update_script() {
     rm -f "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
     log "已是最新版本: $SCRIPT_VERSION"
+    return 0
+  fi
+
+  if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
+    rm -f "$tmp_file"
+    UPDATE_AVAILABLE_VERSION=""
+    log "远端版本较旧, 跳过更新: $new_version (当前: $SCRIPT_VERSION)"
     return 0
   fi
 
