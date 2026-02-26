@@ -35,11 +35,11 @@ init_colors() {
 }
 
 log() {
-  echo "[$(date '+%F %T')] $*"
+  echo "$*"
 }
 
 err() {
-  echo "[$(date '+%F %T')] ERROR: $*" >&2
+  echo "ERROR: $*" >&2
 }
 
 die() {
@@ -108,11 +108,9 @@ detect_os() {
     die "暂不支持的系统: ID=${os_id}, ID_LIKE=${os_like}"
   fi
 
-  log "检测到系统: ID=${os_id}, 使用包管理器: ${PKG_TYPE}"
 }
 
 install_deps() {
-  log "安装基础依赖..."
   case "$PKG_TYPE" in
     apt)
       command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令"
