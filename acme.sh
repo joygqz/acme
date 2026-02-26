@@ -416,11 +416,13 @@ run_menu() {
     cat <<MENU
 ${COLOR_TITLE}ACME 证书管理${COLOR_RESET}
 ${REPO_URL}
-${COLOR_INDEX}1.${COLOR_RESET} 查看证书
-${COLOR_INDEX}2.${COLOR_RESET} 创建证书
-${COLOR_INDEX}3.${COLOR_RESET} 更新证书
-${COLOR_INDEX}4.${COLOR_RESET} 删除证书
-${COLOR_INDEX}0.${COLOR_RESET} 退出
+
+ ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
+ ${COLOR_INDEX}2.${COLOR_RESET} 创建证书
+ ${COLOR_INDEX}3.${COLOR_RESET} 更新证书
+ ${COLOR_INDEX}4.${COLOR_RESET} 删除证书
+ ${COLOR_INDEX}0.${COLOR_RESET} 退出
+
 MENU
 
     read -r -p "请输入序号: " choice
