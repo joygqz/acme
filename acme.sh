@@ -10,11 +10,10 @@ readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
-readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_RAW_BASE_URL="https://raw.githubusercontent.com/joygqz/acme"
-readonly SCRIPT_RAW_URL="${SCRIPT_RAW_BASE_URL}/main/acme.sh"
-readonly SCRIPT_MAIN_COMMIT_API_URL="https://api.github.com/repos/joygqz/acme/commits/main"
-readonly SCRIPT_VERSION="v1.0.0-beta.23"
+readonly REPO_SLUG="joygqz/acme"
+readonly REPO_URL="https://github.com/${REPO_SLUG}"
+readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/${REPO_SLUG}/main/acme.sh"
+readonly SCRIPT_VERSION="v1.0.0-beta.24"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -43,66 +42,13 @@ curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
 }
 
-build_script_raw_url_for_ref() {
-  local ref="$1"
-  printf '%s/%s/acme.sh\n' "$SCRIPT_RAW_BASE_URL" "$ref"
-}
-
-build_script_raw_url_with_no_cache() {
-  local base_url="$1"
-  printf '%s?nocache=%s_%s_%s\n' "$base_url" "$(date +%s)" "$$" "$RANDOM"
-}
-
-fetch_remote_main_commit_sha() {
-  local commit_sha=""
-
-  if ! commit_sha="$(
-    curl_https --retry 2 --retry-delay 1 --connect-timeout 5 --max-time 12 \
-      -H "Accept: application/vnd.github+json" \
-      "$SCRIPT_MAIN_COMMIT_API_URL" 2>/dev/null \
-      | awk -F'"' '/"sha":[[:space:]]*"/ {print $4; exit}'
-  )"; then
-    return 1
-  fi
-
-  [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
-  printf '%s\n' "$commit_sha"
-}
-
-resolve_remote_script_url() {
-  local commit_sha=""
-
-  if commit_sha="$(fetch_remote_main_commit_sha)"; then
-    build_script_raw_url_for_ref "$commit_sha"
-    return
-  fi
-
-  build_script_raw_url_with_no_cache "$SCRIPT_RAW_URL"
-}
-
-curl_remote_script() {
-  local remote_url="$1"
-  shift
-
-  curl_https "$@" \
-    -H "Cache-Control: no-cache, no-store, max-age=0" \
-    -H "Pragma: no-cache" \
-    "$remote_url"
-}
-
 fetch_remote_script_stream() {
-  local remote_url=""
-
-  remote_url="$(resolve_remote_script_url)" || return 1
-  curl_remote_script "$remote_url" --retry 2 --retry-delay 1 --connect-timeout 5 --max-time 12
+  curl_https --retry 2 --retry-delay 1 --connect-timeout 5 --max-time 12 "$SCRIPT_RAW_URL"
 }
 
 download_remote_script_file() {
   local output_file="$1"
-  local remote_url=""
-
-  remote_url="$(resolve_remote_script_url)" || return 1
-  curl_remote_script "$remote_url" --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 -o "$output_file"
+  curl_https --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 "$SCRIPT_RAW_URL" -o "$output_file"
 }
 
 resolve_script_path() {
