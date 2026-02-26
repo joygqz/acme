@@ -179,6 +179,52 @@ run_acme_cmd() {
   fi
 }
 
+get_cert_conf_file() {
+  local domain="$1"
+  local ecc_conf="$ACME_HOME/${domain}_ecc/${domain}.conf"
+  local rsa_conf="$ACME_HOME/$domain/$domain.conf"
+
+  if [[ -f "$ecc_conf" ]]; then
+    printf '%s\n' "$ecc_conf"
+    return 0
+  fi
+  if [[ -f "$rsa_conf" ]]; then
+    printf '%s\n' "$rsa_conf"
+    return 0
+  fi
+  return 1
+}
+
+read_conf_value() {
+  local conf_file="$1"
+  local key="$2"
+  awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$conf_file"
+}
+
+get_cert_variant() {
+  local domain="$1"
+  local conf_file=""
+
+  if conf_file="$(get_cert_conf_file "$domain")"; then
+    if [[ "$conf_file" == *"_ecc/"* ]]; then
+      printf '%s\n' "ecc"
+      return
+    fi
+    printf '%s\n' "rsa"
+    return
+  fi
+
+  printf '%s\n' "ecc"
+}
+
+append_variant_flag() {
+  local cert_variant="$1"
+
+  if [[ "$cert_variant" == "ecc" ]]; then
+    printf '%s\n' "--ecc"
+  fi
+}
+
 issue_cert() {
   local -a issue_args=(
     --issue
@@ -198,6 +244,8 @@ apply_dns_credentials() {
 install_cert_to_dir() {
   local cert_domain="$1"
   local cert_dir="$2"
+  local cert_variant="${3:-$(get_cert_variant "$cert_domain")}"
+  local variant_flag=""
   local -a install_args=(
     --install-cert
     -d "$cert_domain"
@@ -213,10 +261,119 @@ install_cert_to_dir() {
     install_args+=( --reloadcmd "$RELOAD_CMD" )
   fi
 
+  variant_flag="$(append_variant_flag "$cert_variant")"
+  if [[ -n "$variant_flag" ]]; then
+    install_args+=( "$variant_flag" )
+  fi
+
   run_acme_cmd "证书安装" "${install_args[@]}"
 
   chmod 600 "$cert_dir/$cert_domain.key"
   chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
+}
+
+prompt_existing_cert_domain() {
+  local target_var="$1"
+  local prompt="$2"
+  local raw_list=""
+  local domains=""
+  local target_domain=""
+
+  raw_list="$(get_cert_list_raw)" || return 1
+  print_cert_list "$raw_list" || return 1
+
+  domains="$(extract_cert_domains "$raw_list")"
+  if [[ -z "$domains" ]]; then
+    return 3
+  fi
+
+  while true; do
+    target_domain="$(prompt_domain_value "$prompt")"
+    if printf '%s\n' "$domains" | grep -Fxq -- "$target_domain"; then
+      printf -v "$target_var" '%s' "$target_domain"
+      return 0
+    fi
+    err "证书不存在: $target_domain."
+  done
+}
+
+is_safe_delete_dir() {
+  local path="$1"
+
+  [[ -n "$path" ]] || return 1
+  [[ "$path" != "/" ]] || return 1
+  [[ "$path" != "/root" ]] || return 1
+  [[ "$path" != "/etc" ]] || return 1
+  [[ "$path" != "/etc/ssl" ]] || return 1
+  return 0
+}
+
+remove_dir_if_safe() {
+  local path="$1"
+
+  [[ "$path" != "-" ]] || return 1
+  [[ -d "$path" ]] || return 1
+  if ! is_safe_delete_dir "$path"; then
+    err "目录未删除, 路径不安全: $path."
+    return 1
+  fi
+  rm -rf "$path"
+  return 0
+}
+
+trim_outer_quotes() {
+  local value="$1"
+
+  value="${value#\'}"
+  value="${value%\'}"
+  value="${value#\"}"
+  value="${value%\"}"
+  printf '%s' "$value"
+}
+
+truncate_text() {
+  local value="$1"
+  local width="$2"
+
+  if [[ "${#value}" -le "$width" ]]; then
+    printf '%s' "$value"
+    return
+  fi
+
+  if [[ "$width" -le 3 ]]; then
+    printf '%.*s' "$width" "$value"
+    return
+  fi
+
+  printf '%.*s...' "$((width - 3))" "$value"
+}
+
+get_cert_install_dir() {
+  local domain="$1"
+  local conf_file=""
+  local cert_path=""
+  local key_path=""
+
+  if ! conf_file="$(get_cert_conf_file "$domain")"; then
+    printf '%s\n' "-"
+    return
+  fi
+
+  cert_path="$(read_conf_value "$conf_file" "Le_FullchainPath")"
+  key_path="$(read_conf_value "$conf_file" "Le_KeyPath")"
+  cert_path="$(trim_outer_quotes "$cert_path")"
+  key_path="$(trim_outer_quotes "$key_path")"
+
+  if [[ -n "$cert_path" ]]; then
+    dirname "$cert_path"
+    return
+  fi
+  if [[ -n "$key_path" ]]; then
+    dirname "$key_path"
+    return
+  fi
+
+  printf '%s\n' "-"
 }
 
 prompt_inputs() {
@@ -313,6 +470,21 @@ print_cert_list() {
   local raw_list="$1"
   local data_count=0
   local border=""
+  local no=0
+  local main_domain=""
+  local key_length=""
+  local san_domains=""
+  local ca=""
+  local created=""
+  local renew=""
+  local install_dir=""
+  local main_domain_fmt=""
+  local key_length_fmt=""
+  local san_domains_fmt=""
+  local ca_fmt=""
+  local created_fmt=""
+  local renew_fmt=""
+  local install_dir_fmt=""
 
   data_count="$(printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {count++} END {print count+0}')"
   if [[ "$data_count" -eq 0 ]]; then
@@ -320,46 +492,58 @@ print_cert_list() {
     return 0
   fi
 
-  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
+  border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
   printf '\n'
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
   printf '\n'
   printf '%s\n' "$border"
-  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
-    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
+  printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+    "No" "Domain" "Key" "SAN" "CA" "Created" "Renew" "Install Dir"
   printf '%s\n' "$border"
 
-  printf '%s\n' "$raw_list" | awk -v c="$COLOR_INDEX" -v r="$COLOR_RESET" '
-    function trunc(s, w) {
-      if (length(s) <= w) return s
-      return substr(s, 1, w - 3) "..."
-    }
-    NR == 1 { next }
-    NF > 0 {
-      n++
-      main_domain = $1
-      key_length = $2
-      san_domains = $3
-      ca = (NF >= 4 ? $4 : "-")
-      created = (NF >= 5 ? $5 : "-")
-      renew = (NF >= 6 ? $6 : "-")
+  while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
+    no=$((no + 1))
+    install_dir="$(get_cert_install_dir "$main_domain")"
 
-      gsub(/"/, "", key_length)
-      if (san_domains == "no" || san_domains == "") san_domains = "-"
-      if (ca == "") ca = "-"
-      if (created == "") created = "-"
-      if (renew == "") renew = "-"
+    main_domain_fmt="$(truncate_text "$main_domain" 25)"
+    key_length_fmt="$(truncate_text "$key_length" 7)"
+    san_domains_fmt="$(truncate_text "$san_domains" 25)"
+    ca_fmt="$(truncate_text "$ca" 11)"
+    created_fmt="$(truncate_text "$created" 20)"
+    renew_fmt="$(truncate_text "$renew" 20)"
+    install_dir_fmt="$(truncate_text "$install_dir" 26)"
 
-      printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n",
-        c, n, r,
-        trunc(main_domain, 25),
-        trunc(key_length, 7),
-        trunc(san_domains, 25),
-        trunc(ca, 11),
-        trunc(created, 20),
-        trunc(renew, 20)
-    }
-  '
+    printf "| %s%2d%s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+      "$COLOR_INDEX" "$no" "$COLOR_RESET" \
+      "$main_domain_fmt" \
+      "$key_length_fmt" \
+      "$san_domains_fmt" \
+      "$ca_fmt" \
+      "$created_fmt" \
+      "$renew_fmt" \
+      "$install_dir_fmt"
+  done < <(
+    printf '%s\n' "$raw_list" | awk '
+      NR == 1 { next }
+      NF > 0 {
+        main_domain = $1
+        key_length = $2
+        san_domains = $3
+        ca = (NF >= 4 ? $4 : "-")
+        created = (NF >= 5 ? $5 : "-")
+        renew = (NF >= 6 ? $6 : "-")
+
+        gsub(/"/, "", key_length)
+        if (san_domains == "no" || san_domains == "") san_domains = "-"
+        if (ca == "") ca = "-"
+        if (created == "") created = "-"
+        if (renew == "") renew = "-"
+
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, ca, created, renew
+      }
+    '
+  )
+
   printf '%s\n' "$border"
   log "证书总数: $data_count."
   printf '\n'
@@ -388,11 +572,30 @@ create_cert() {
 
 update_cert() {
   local target_domain=""
+  local cert_variant=""
   local cert_dir=""
+  local current_install_dir=""
   local answer=""
+  local variant_flag=""
+  local -a renew_args=()
+  local select_rc=0
 
-  target_domain="$(prompt_domain_value "请输入要更新的域名: ")"
+  if prompt_existing_cert_domain target_domain "请输入待更新域名: "; then
+    :
+  else
+    select_rc=$?
+    if [[ "$select_rc" -eq 3 ]]; then
+      return 0
+    fi
+    return "$select_rc"
+  fi
+
+  cert_variant="$(get_cert_variant "$target_domain")"
+  current_install_dir="$(get_cert_install_dir "$target_domain")"
   cert_dir="/etc/ssl/$target_domain"
+  if [[ "$current_install_dir" != "-" ]]; then
+    cert_dir="$current_install_dir"
+  fi
   read -r -p "请输入证书输出目录 (默认: $cert_dir): " answer
   cert_dir="${answer:-$cert_dir}"
 
@@ -401,60 +604,49 @@ update_cert() {
   fi
 
   log "正在更新证书..."
-  run_acme_cmd "证书更新" --renew -d "$target_domain" --force
+  renew_args=( --renew -d "$target_domain" --force )
+  variant_flag="$(append_variant_flag "$cert_variant")"
+  if [[ -n "$variant_flag" ]]; then
+    renew_args+=( "$variant_flag" )
+  fi
+  run_acme_cmd "证书更新" "${renew_args[@]}"
 
-  install_cert_to_dir "$target_domain" "$cert_dir"
+  install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
   log "更新成功: $target_domain -> $cert_dir."
 }
 
 delete_cert() {
   local target_domain=""
-  local selector=""
-  local raw_list=""
-  local domains=""
-  local answer=""
-  local cert_dir=""
+  local cert_variant=""
+  local install_dir=""
+  local cert_dir_default=""
+  local variant_flag=""
   local acme_dir_rsa=""
   local acme_dir_ecc=""
-  local local_dir_deleted=0
+  local removed_local_dirs=0
+  local -a remove_args=()
+  local select_rc=0
 
-  raw_list="$(get_cert_list_raw)" || return 1
-  print_cert_list "$raw_list" || return 1
-  domains="$(extract_cert_domains "$raw_list")"
-  if [[ -z "$domains" ]]; then
-    return 0
-  fi
-
-  while true; do
-    read -r -p "请输入待删除的序号或域名 (0 返回): " selector
-    if [[ -z "$selector" ]]; then
-      err "请输入序号或域名, 或输入 0 返回."
-      continue
-    fi
-
-    if [[ "$selector" == "0" ]]; then
-      log "已取消删除."
+  if prompt_existing_cert_domain target_domain "请输入待删除域名: "; then
+    :
+  else
+    select_rc=$?
+    if [[ "$select_rc" -eq 3 ]]; then
       return 0
     fi
+    return "$select_rc"
+  fi
 
-    if [[ "$selector" =~ ^[0-9]+$ ]]; then
-      target_domain="$(printf '%s\n' "$domains" | sed -n "${selector}p")"
-      if [[ -z "$target_domain" ]]; then
-        err "序号无效: $selector."
-        continue
-      fi
-      break
-    fi
+  cert_variant="$(get_cert_variant "$target_domain")"
+  install_dir="$(get_cert_install_dir "$target_domain")"
+  cert_dir_default="/etc/ssl/$target_domain"
 
-    if printf '%s\n' "$domains" | grep -Fxq -- "$selector"; then
-      target_domain="$selector"
-      break
-    fi
-
-    err "未找到域名: $selector."
-  done
-
-  run_acme_cmd "证书删除" --remove -d "$target_domain"
+  remove_args=( --remove -d "$target_domain" )
+  variant_flag="$(append_variant_flag "$cert_variant")"
+  if [[ -n "$variant_flag" ]]; then
+    remove_args+=( "$variant_flag" )
+  fi
+  run_acme_cmd "证书删除" "${remove_args[@]}"
 
   acme_dir_rsa="$ACME_HOME/$target_domain"
   acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
@@ -465,20 +657,18 @@ delete_cert() {
     rm -rf "$acme_dir_ecc"
   fi
 
-  cert_dir="/etc/ssl/$target_domain"
-  if [[ -d "$cert_dir" ]]; then
-    read -r -p "是否删除本地证书目录 $cert_dir? [y/N]: " answer
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-      rm -rf "$cert_dir"
-      local_dir_deleted=1
-    fi
+  if remove_dir_if_safe "$install_dir"; then
+    removed_local_dirs=1
+  fi
+  if [[ "$cert_dir_default" != "$install_dir" ]] && remove_dir_if_safe "$cert_dir_default"; then
+    removed_local_dirs=1
   fi
 
-  if [[ "$local_dir_deleted" -eq 1 ]]; then
-    log "删除成功: $target_domain, 本地目录已删除: $cert_dir."
-  else
-    log "删除成功: $target_domain."
+  if [[ "$removed_local_dirs" -eq 1 ]]; then
+    log "删除成功: $target_domain, 目录已清理."
+    return
   fi
+  log "删除成功: $target_domain."
 }
 
 print_main_menu() {
