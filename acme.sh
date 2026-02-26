@@ -545,12 +545,10 @@ update_cert() {
   local cert_variant=""
   local cert_dir=""
   local current_install_dir=""
-  local variant_flag=""
   local answer=""
   local select_rc=0
-  local -a renew_args=()
 
-  if prompt_existing_cert_domain target_domain "请输入待更新域名: "; then
+  if prompt_existing_cert_domain target_domain "请输入待更换目录域名: "; then
     :
   else
     select_rc=$?
@@ -569,19 +567,8 @@ update_cert() {
   read -r -p "请输入证书输出目录 (默认: $cert_dir): " answer
   cert_dir="${answer:-$cert_dir}"
 
-  if [[ -n "$CF_Key" && -n "$CF_Email" ]]; then
-    apply_dns_credentials
-  fi
-
-  renew_args=( --renew --domain "$target_domain" --force )
-  variant_flag="$(append_variant_flag "$cert_variant")"
-  if [[ -n "$variant_flag" ]]; then
-    renew_args+=( "$variant_flag" )
-  fi
-  run_acme_cmd "证书更新" "${renew_args[@]}"
-
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
-  log "更新成功: $target_domain -> $cert_dir"
+  log "目录更换成功: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
@@ -632,7 +619,7 @@ ${REPO_URL}
 
  ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
  ${COLOR_INDEX}2.${COLOR_RESET} 创建证书
- ${COLOR_INDEX}3.${COLOR_RESET} 更新证书
+ ${COLOR_INDEX}3.${COLOR_RESET} 更换安装目录
  ${COLOR_INDEX}4.${COLOR_RESET} 删除证书
  ${COLOR_INDEX}0.${COLOR_RESET} 退出
 
