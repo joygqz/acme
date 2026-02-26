@@ -318,6 +318,7 @@ list_certs() {
   border="+----+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+"
   echo
   printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
+  echo
   printf '%s\n' "$border"
   printf "| %-2s | %-25s | %-7s | %-25s | %-11s | %-20s | %-20s |\n" \
     "No" "Domain" "Key" "SAN" "CA" "Created" "Renew"
@@ -482,6 +483,7 @@ run_menu() {
     cat <<MENU
 
 ${COLOR_TITLE}ACME 证书管理${COLOR_RESET}
+
 https://github.com/joygqz/acme
 
  ${COLOR_INDEX}1.${COLOR_RESET} 查看证书
