@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 readonly DEFAULT_KEY_TYPE="ec-256"
 readonly DEFAULT_CA_SERVER="letsencrypt"
@@ -8,7 +9,8 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.9"
+readonly SCRIPT_VERSION="v1.0.0-beta.10"
+readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -26,6 +28,95 @@ COLOR_RESET=""
 COLOR_TITLE=""
 COLOR_INDEX=""
 COLOR_ERROR_TEXT=""
+LOCK_FD=""
+DIR_LOCK_DIR=""
+DIR_LOCK_PID_FILE=""
+
+get_process_start_token() {
+  local pid="$1"
+  local token=""
+  local lstart=""
+
+  if [[ -r "/proc/$pid/stat" ]]; then
+    token="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
+    if [[ -n "$token" ]]; then
+      printf '%s\n' "$token"
+      return
+    fi
+  fi
+
+  lstart="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]][[:space:]]*/ /g')"
+  if [[ -n "$lstart" ]]; then
+    printf '%s\n' "$lstart" | cksum | awk '{print $1}'
+    return
+  fi
+
+  printf '\n'
+}
+
+arm_dir_lock_cleanup() {
+  local lock_dir="$1"
+  local pid_file="$2"
+
+  DIR_LOCK_DIR="$lock_dir"
+  DIR_LOCK_PID_FILE="$pid_file"
+  trap 'rm -f "$DIR_LOCK_PID_FILE" >/dev/null 2>&1 || true; rmdir "$DIR_LOCK_DIR" >/dev/null 2>&1 || true' EXIT
+}
+
+acquire_lock() {
+  local lock_dir=""
+  local pid_file=""
+  local lock_pid=""
+  local lock_start_token=""
+  local current_start_token=""
+  local self_start_token=""
+
+  mkdir -p "$(dirname "$LOCK_FILE")"
+
+  if command -v flock >/dev/null 2>&1; then
+    exec {LOCK_FD}> "$LOCK_FILE"
+    if ! flock -n "$LOCK_FD"; then
+      die "检测到脚本正在运行, 请稍后重试"
+    fi
+    return
+  fi
+
+  lock_dir="${LOCK_FILE}.d"
+  pid_file="$lock_dir/pid"
+
+  if mkdir "$lock_dir" 2>/dev/null; then
+    self_start_token="$(get_process_start_token "$$")"
+    printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
+    arm_dir_lock_cleanup "$lock_dir" "$pid_file"
+    return
+  fi
+
+  if [[ -f "$pid_file" ]]; then
+    read -r lock_pid lock_start_token < "$pid_file" || true
+    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
+      current_start_token="$(get_process_start_token "$lock_pid")"
+      if [[ -z "$lock_start_token" ]]; then
+        die "检测到脚本正在运行, 请稍后重试"
+      fi
+      if [[ -z "$current_start_token" ]]; then
+        die "检测到脚本正在运行, 请稍后重试"
+      fi
+      if [[ "$lock_start_token" == "$current_start_token" ]]; then
+        die "检测到脚本正在运行, 请稍后重试"
+      fi
+    fi
+  fi
+
+  rm -f "$pid_file" >/dev/null 2>&1 || true
+  if rmdir "$lock_dir" >/dev/null 2>&1 && mkdir "$lock_dir" 2>/dev/null; then
+    self_start_token="$(get_process_start_token "$$")"
+    printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
+    arm_dir_lock_cleanup "$lock_dir" "$pid_file"
+    return
+  fi
+
+  die "检测到脚本正在运行, 请稍后重试"
+}
 
 init_colors() {
   if [[ "${NO_COLOR:-}" == "1" || "${NO_COLOR:-}" == "true" ]]; then
@@ -38,15 +129,15 @@ init_colors() {
 }
 
 log() {
-  echo "$*"
+  printf '%s\n' "$*"
 }
 
 err() {
   if [[ -n "$COLOR_ERROR_TEXT" ]]; then
-    echo "${COLOR_ERROR_TEXT}$*${COLOR_RESET}" >&2
+    printf '%s\n' "${COLOR_ERROR_TEXT}$*${COLOR_RESET}" >&2
     return
   fi
-  echo "$*" >&2
+  printf '%s\n' "$*" >&2
 }
 
 die() {
@@ -102,7 +193,8 @@ has_base_dependencies() {
   command -v curl >/dev/null 2>&1 && \
     command -v socat >/dev/null 2>&1 && \
     command -v openssl >/dev/null 2>&1 && \
-    command -v crontab >/dev/null 2>&1
+    command -v crontab >/dev/null 2>&1 && \
+    command -v flock >/dev/null 2>&1
 }
 
 has_ca_bundle() {
@@ -116,19 +208,19 @@ install_deps() {
       if ! has_base_dependencies || ! has_ca_bundle; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
-        apt-get install -y curl socat cron openssl ca-certificates
+        apt-get install -y --no-install-recommends curl socat cron openssl ca-certificates util-linux
       fi
       ;;
     yum)
       command -v yum >/dev/null 2>&1 || die "缺少 yum 命令"
       if ! has_base_dependencies || ! has_ca_bundle; then
-        yum install -y curl socat cronie openssl ca-certificates
+        yum install -y curl socat cronie openssl ca-certificates util-linux
       fi
       ;;
     dnf)
       command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令"
       if ! has_base_dependencies || ! has_ca_bundle; then
-        dnf install -y curl socat cronie openssl ca-certificates
+        dnf install -y curl socat cronie openssl ca-certificates util-linux
       fi
       ;;
     *)
@@ -481,6 +573,7 @@ install_cert_to_dir() {
   [[ -n "$cert_variant" ]] || die "证书类型不能为空"
 
   mkdir -p "$cert_dir"
+  chmod 755 "$cert_dir"
 
   variant_flag="$(append_variant_flag "$cert_variant")"
   if [[ -n "$variant_flag" ]]; then
@@ -663,47 +756,28 @@ prompt_domain_value() {
 }
 
 get_cert_list_raw() {
-  "$ACME_SH" --list
+  "$ACME_SH" --list --listraw
 }
 
 parse_cert_list_rows() {
   local raw_list="$1"
-  printf '%s\n' "$raw_list" | awk '
+  printf '%s\n' "$raw_list" | awk -F'|' '
     NR == 1 { next }
     NF == 0 { next }
     {
-      start = 1
-      if ($1 ~ /^[0-9]+$/) {
-        start = 2
-      }
+      main_domain = $1
+      key_length = $2
+      san_domains = $3
+      ca = $5
+      created = $6
+      renew = $7
 
-      main_domain = $start
-      key_length = $(start + 1)
-      san_domains = $(start + 2)
-      remain = NF - (start + 2)
-      ca = "-"
-      created = "-"
-      renew = "-"
-      tail_count = 0
-
-      for (i = 1; i <= remain; i++) {
-        tail[++tail_count] = $(start + 2 + i)
-      }
-
-      # 从右向左识别时间戳列: Renew, Created
-      if (tail_count >= 1 && tail[tail_count] ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/) {
-        renew = tail[tail_count]
-        tail_count--
-      }
-      if (tail_count >= 1 && tail[tail_count] ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/) {
-        created = tail[tail_count]
-        tail_count--
-      }
-
-      # 剩余尾部最后一个字段视为 CA, 中间可能存在 Profile
-      if (tail_count >= 1) {
-        ca = tail[tail_count]
-      }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", main_domain)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key_length)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", san_domains)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", ca)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", created)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", renew)
 
       gsub(/"/, "", key_length)
       if (san_domains == "no" || san_domains == "") san_domains = "-"
@@ -925,6 +999,7 @@ main() {
   fi
 
   require_root
+  acquire_lock
   init_colors
   detect_os
   install_deps
