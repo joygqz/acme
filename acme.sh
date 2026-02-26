@@ -237,7 +237,23 @@ issue_cert() {
     --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
-  run_acme_cmd "证书申请" "${issue_args[@]}"
+  local output_file=""
+
+  output_file="$(mktemp)"
+  if "$ACME_SH" "${issue_args[@]}" 2>&1 | tee "$output_file"; then
+    rm -f "$output_file"
+    return 0
+  fi
+
+  # acme.sh 在证书未到续期时间时会返回非 0, 但现有证书可继续安装到目标目录.
+  if grep -Fq "Domains not changed." "$output_file" || grep -Fq "Skipping. Next renewal time is:" "$output_file"; then
+    rm -f "$output_file"
+    return 0
+  fi
+
+  rm -f "$output_file"
+  err "证书申请失败"
+  return 1
 }
 
 apply_dns_credentials() {
