@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.15"
+readonly SCRIPT_VERSION="v1.0.0-beta.16"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -1349,7 +1349,7 @@ print_main_menu() {
 
   case "$UPDATE_CHECK_STATUS" in
     available)
-      update_label="更新脚本 (最新: $UPDATE_AVAILABLE_VERSION)"
+      update_label="更新脚本 最新: $UPDATE_AVAILABLE_VERSION"
       ;;
     latest)
       if [[ -n "$UPDATE_CHECKED_VERSION" ]]; then
@@ -1359,7 +1359,7 @@ print_main_menu() {
       fi
       ;;
     failed)
-      update_label="更新脚本 (检查失败)"
+      update_label="更新脚本"
       ;;
   esac
 
