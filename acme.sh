@@ -146,13 +146,13 @@ issue_cert() {
     -d "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
-  log "使用固定 DNS 模式签发: $DNS_PROVIDER"
+  log "开始申请证书..."
   "$ACME_SH" "${issue_args[@]}"
 }
 
 apply_dns_credentials() {
   export CF_Key CF_Email
-  log "已加载 Cloudflare DNS 凭据: CF_Key / CF_Email"
+  log "验证信息已加载"
 }
 
 install_cert() {
