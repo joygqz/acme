@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.11"
+readonly SCRIPT_VERSION="v1.0.0-beta.12"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -38,6 +38,10 @@ LOCK_FD=""
 DIR_LOCK_DIR=""
 DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
+
+curl_https() {
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
+}
 
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
@@ -66,7 +70,7 @@ fetch_remote_script_version() {
   local remote_version=""
 
   if ! remote_version="$(
-    curl -fsSL --retry 2 --retry-delay 1 --connect-timeout 5 "$SCRIPT_RAW_URL" 2>/dev/null \
+    curl_https --retry 2 --retry-delay 1 --connect-timeout 5 "$SCRIPT_RAW_URL" 2>/dev/null \
       | awk -F'"' '
           /^readonly SCRIPT_VERSION=/ {v=$2}
           END {
@@ -301,12 +305,6 @@ detect_os() {
 
 }
 
-has_base_dependencies() {
-  local missing_deps_str=""
-  missing_deps_str="$(get_missing_base_dependencies)"
-  [[ -z "$missing_deps_str" ]]
-}
-
 has_ca_bundle() {
   [[ -r /etc/ssl/certs/ca-certificates.crt || -r /etc/pki/tls/certs/ca-bundle.crt ]]
 }
@@ -316,16 +314,18 @@ has_systemd() {
 }
 
 needs_dependency_install() {
-  local need_install="0"
+  local missing_deps=""
 
-  if ! has_base_dependencies; then
-    need_install="1"
+  missing_deps="$(get_missing_base_dependencies)"
+  if [[ -n "$missing_deps" ]]; then
+    return 0
   fi
+
   if ! has_ca_bundle; then
-    need_install="1"
+    return 0
   fi
 
-  [[ "$need_install" == "1" ]]
+  return 1
 }
 
 ensure_cron_service_running() {
@@ -405,7 +405,7 @@ install_deps() {
 
 install_acme_sh() {
   if [[ ! -x "$ACME_SH" ]]; then
-    curl -fsSL --retry 3 --retry-delay 1 --connect-timeout 10 "$ACME_INSTALL_URL" \
+    curl_https --retry 3 --retry-delay 1 --connect-timeout 10 "$ACME_INSTALL_URL" \
       | sh -s "email=$EMAIL" --home "$ACME_HOME" --no-profile
   fi
 
@@ -1239,7 +1239,7 @@ update_script() {
     return 1
   fi
 
-  if ! curl -fsSL --retry 3 --retry-delay 1 --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$tmp_file"; then
+  if ! curl_https --retry 3 --retry-delay 1 --connect-timeout 10 "$SCRIPT_RAW_URL" -o "$tmp_file"; then
     rm -f "$tmp_file"
     err "下载更新失败"
     return 1
@@ -1258,17 +1258,14 @@ update_script() {
     return 1
   fi
 
-  if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
-    rm -f "$tmp_file"
-    UPDATE_AVAILABLE_VERSION=""
-    log "已是最新版本: $SCRIPT_VERSION"
-    return 0
-  fi
-
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     rm -f "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    log "远端版本较旧, 跳过更新: $new_version (当前: $SCRIPT_VERSION)"
+    if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
+      log "已是最新版本: $SCRIPT_VERSION"
+    else
+      log "远端版本较旧, 跳过更新: $new_version (当前: $SCRIPT_VERSION)"
+    fi
     return 0
   fi
 
