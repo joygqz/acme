@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.29"
+readonly SCRIPT_VERSION="v1.0.0-beta.30"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -63,15 +63,15 @@ resolve_script_path() {
   printf '%s\n' "$source_path"
 }
 
-extract_version_from_script_file() {
-  local file_path="$1"
-  awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}' "$file_path"
+extract_script_version() {
+  local input="${1:--}"
+  awk -F'"' '/^[[:space:]]*readonly[[:space:]]+SCRIPT_VERSION=/{print $2; exit}' "$input"
 }
 
 fetch_remote_script_version() {
   local remote_version=""
 
-  if ! remote_version="$(curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 5 --max-time 15 2>/dev/null | awk -F'"' '/^readonly SCRIPT_VERSION=/{print $2; exit}')"; then
+  if ! remote_version="$(curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 5 --max-time 15 2>/dev/null | extract_script_version)"; then
     return 1
   fi
 
@@ -609,11 +609,6 @@ cert_variant_exists() {
   [[ -f "$conf_path" ]]
 }
 
-domain_has_existing_cert() {
-  local domain="$1"
-  get_cert_conf_file "$domain" >/dev/null 2>&1
-}
-
 cleanup_stale_domain_dirs() {
   local domain="$1"
   local variant=""
@@ -859,7 +854,6 @@ prompt_cloudflare_credentials() {
 reset_create_inputs() {
   DOMAIN=""
   OUTPUT_DIR=""
-  EMAIL=""
   CF_Key=""
   CF_Email=""
   CF_Token=""
@@ -1143,7 +1137,7 @@ create_cert() {
   reset_create_inputs
   DOMAIN="$(prompt_domain_value "请输入域名 (例如: example.com): ")"
 
-  if domain_has_existing_cert "$DOMAIN"; then
+  if get_cert_conf_file "$DOMAIN" >/dev/null 2>&1; then
     err "域名已存在证书: $DOMAIN"
     return 1
   fi
@@ -1246,7 +1240,7 @@ update_script() {
     return 1
   fi
 
-  new_version="$(extract_version_from_script_file "$tmp_file")"
+  new_version="$(extract_script_version "$tmp_file")"
   if [[ -z "$new_version" ]]; then
     remove_file_and_error "$tmp_file" "无法读取新版本号"
     return 1
