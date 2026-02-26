@@ -12,8 +12,9 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.16"
+readonly SCRIPT_VERSION="v1.0.0-beta.17"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
+readonly UPDATE_CACHE_FILE="$ACME_HOME/.script_update_version"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -89,6 +90,29 @@ fetch_remote_script_version() {
   printf '%s\n' "$remote_version"
 }
 
+read_cached_update_version() {
+  local cached_version=""
+
+  if [[ ! -r "$UPDATE_CACHE_FILE" ]]; then
+    return 1
+  fi
+
+  cached_version="$(head -n 1 "$UPDATE_CACHE_FILE" 2>/dev/null | tr -d '\r')"
+  [[ -n "$cached_version" ]] || return 1
+  printf '%s\n' "$cached_version"
+}
+
+write_cached_update_version() {
+  local remote_version="$1"
+
+  [[ -n "$remote_version" ]] || return
+  printf '%s\n' "$remote_version" > "$UPDATE_CACHE_FILE" 2>/dev/null || true
+}
+
+clear_cached_update_version() {
+  remove_file_quietly "$UPDATE_CACHE_FILE"
+}
+
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
@@ -111,6 +135,14 @@ check_script_update() {
   local remote_version=""
 
   if ! remote_version="$(fetch_remote_script_version)"; then
+    if remote_version="$(read_cached_update_version)"; then
+      UPDATE_CHECKED_VERSION="$remote_version"
+      if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+        UPDATE_AVAILABLE_VERSION="$remote_version"
+        UPDATE_CHECK_STATUS="available"
+        return
+      fi
+    fi
     UPDATE_AVAILABLE_VERSION=""
     UPDATE_CHECKED_VERSION=""
     UPDATE_CHECK_STATUS="failed"
@@ -120,6 +152,7 @@ check_script_update() {
   UPDATE_CHECKED_VERSION="$remote_version"
 
   if ! is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+    clear_cached_update_version
     UPDATE_AVAILABLE_VERSION=""
     UPDATE_CHECK_STATUS="latest"
     return
@@ -127,6 +160,7 @@ check_script_update() {
 
   UPDATE_AVAILABLE_VERSION="$remote_version"
   UPDATE_CHECK_STATUS="available"
+  write_cached_update_version "$remote_version"
 }
 
 get_process_start_token() {
@@ -1318,6 +1352,7 @@ update_script() {
 
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
+    clear_cached_update_version
     UPDATE_AVAILABLE_VERSION=""
     UPDATE_CHECKED_VERSION="$new_version"
     UPDATE_CHECK_STATUS="latest"
@@ -1335,6 +1370,7 @@ update_script() {
     return 1
   fi
 
+  clear_cached_update_version
   UPDATE_AVAILABLE_VERSION=""
   UPDATE_CHECKED_VERSION=""
   UPDATE_CHECK_STATUS="unchecked"
@@ -1376,10 +1412,6 @@ print_main_menu() {
   printf '\n'
 }
 
-run_menu_action() {
-  "$@" || true
-}
-
 print_usage() {
   cat <<USAGE
 用法:
@@ -1400,16 +1432,16 @@ run_menu() {
     read -r -p "请输入选择 [0-5]: " choice
     case "$choice" in
       1)
-        run_menu_action list_certs
+        list_certs || true
         ;;
       2)
-        run_menu_action create_cert
+        create_cert || true
         ;;
       3)
-        run_menu_action update_cert
+        update_cert || true
         ;;
       4)
-        run_menu_action delete_cert
+        delete_cert || true
         ;;
       5)
         if ! update_script; then
