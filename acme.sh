@@ -53,29 +53,14 @@ ensure_not_empty() {
 ensure_valid_domain() {
   local value="$1"
   ensure_not_empty "域名" "$value"
-  is_valid_domain "$value" || die "域名格式不正确: $value"
+  is_valid_domain "$value" || die "域名格式不正确：$value"
 }
 
 ensure_valid_email() {
   local field="$1"
   local value="$2"
   ensure_not_empty "$field" "$value"
-  is_valid_email "$value" || die "$field 格式不正确: $value"
-}
-
-expand_home_path() {
-  local path="$1"
-  case "$path" in
-    "~")
-      printf '%s\n' "$HOME"
-      ;;
-    "~/"*)
-      printf '%s/%s\n' "$HOME" "${path#~/}"
-      ;;
-    *)
-      printf '%s\n' "$path"
-      ;;
-  esac
+  is_valid_email "$value" || die "$field 格式不正确：$value"
 }
 
 is_valid_domain() {
@@ -117,7 +102,7 @@ detect_os() {
     fi
     CRON_SERVICE="crond"
   else
-    die "暂不支持的系统: ID=${os_id}, ID_LIKE=${os_like}"
+    die "暂不支持的系统：ID=${os_id}，ID_LIKE=${os_like}"
   fi
 
 }
@@ -125,21 +110,21 @@ detect_os() {
 install_deps() {
   case "$PKG_TYPE" in
     apt)
-      command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令"
+      command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令。"
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y curl socat cron openssl ca-certificates
       ;;
     yum)
-      command -v yum >/dev/null 2>&1 || die "缺少 yum 命令"
+      command -v yum >/dev/null 2>&1 || die "缺少 yum 命令。"
       yum install -y curl socat cronie openssl ca-certificates
       ;;
     dnf)
-      command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令"
+      command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令。"
       dnf install -y curl socat cronie openssl ca-certificates
       ;;
     *)
-      die "未知包管理器: $PKG_TYPE"
+      die "未知包管理器：$PKG_TYPE"
       ;;
   esac
 
@@ -157,7 +142,7 @@ install_acme_sh() {
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    die "acme.sh 安装失败，未找到: $ACME_SH"
+    die "acme.sh 安装失败，未找到：$ACME_SH"
   fi
 
   "$ACME_SH" --upgrade --auto-upgrade
@@ -174,9 +159,9 @@ prompt_install_email_if_needed() {
   fi
 
   while [[ -z "$EMAIL" ]]; do
-    read -r -p "首次安装需要邮箱，请输入邮箱: " EMAIL
+    read -r -p "首次安装需要邮箱，请输入邮箱：" EMAIL
     if [[ -n "$EMAIL" ]] && ! is_valid_email "$EMAIL"; then
-      err "邮箱格式不正确: $EMAIL"
+      err "邮箱格式不正确：$EMAIL"
       EMAIL=""
     fi
   done
@@ -198,20 +183,19 @@ apply_dns_credentials() {
   export CF_Key CF_Email
 }
 
-install_cert() {
-  local cert_dir="$OUTPUT_DIR"
-  local -a install_args=()
-
-  mkdir -p "$cert_dir"
-
-  install_args=(
+install_cert_to_dir() {
+  local cert_domain="$1"
+  local cert_dir="$2"
+  local -a install_args=(
     --install-cert
-    -d "$DOMAIN"
-    --key-file "$cert_dir/$DOMAIN.key"
+    -d "$cert_domain"
+    --key-file "$cert_dir/$cert_domain.key"
     --fullchain-file "$cert_dir/fullchain.cer"
     --cert-file "$cert_dir/cert.cer"
     --ca-file "$cert_dir/ca.cer"
   )
+
+  mkdir -p "$cert_dir"
 
   if [[ -n "$RELOAD_CMD" ]]; then
     install_args+=( --reloadcmd "$RELOAD_CMD" )
@@ -219,10 +203,8 @@ install_cert() {
 
   "$ACME_SH" "${install_args[@]}"
 
-  chmod 600 "$cert_dir/$DOMAIN.key"
+  chmod 600 "$cert_dir/$cert_domain.key"
   chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
-
-  log "证书已安装到: $cert_dir"
 }
 
 prompt_inputs() {
@@ -231,23 +213,23 @@ prompt_inputs() {
   local email_prompt=""
 
   while [[ -z "$DOMAIN" ]]; do
-    read -r -p "域名 (例如 example.com): " DOMAIN
+    read -r -p "域名（例如 example.com）：" DOMAIN
     if [[ -n "$DOMAIN" ]] && ! is_valid_domain "$DOMAIN"; then
-      err "域名格式不正确: $DOMAIN"
+      err "域名格式不正确：$DOMAIN"
       DOMAIN=""
     fi
   done
 
   while [[ -z "$CF_Email" ]]; do
-    read -r -p "Cloudflare 邮箱 (CF_Email): " CF_Email
+    read -r -p "Cloudflare 邮箱（CF_Email）：" CF_Email
     if [[ -n "$CF_Email" ]] && ! is_valid_email "$CF_Email"; then
-      err "CF_Email 格式不正确: $CF_Email"
+      err "CF_Email 格式不正确：$CF_Email"
       CF_Email=""
     fi
   done
 
   while [[ -z "$CF_Key" ]]; do
-    read -r -p "Cloudflare Global API Key (CF_Key): " CF_Key
+    read -r -p "Cloudflare Global API Key（CF_Key）：" CF_Key
     if [[ -z "$CF_Key" ]]; then
       err "CF_Key 不能为空"
     fi
@@ -255,21 +237,20 @@ prompt_inputs() {
 
   if [[ -z "$EMAIL" ]]; then
     EMAIL="$CF_Email"
-    email_prompt="ACME 账号邮箱 (默认与 CF_Email 相同: $EMAIL): "
+    email_prompt="ACME 账号邮箱（默认与 CF_Email 相同：$EMAIL）："
   else
-    email_prompt="ACME 账号邮箱 (默认: $EMAIL): "
+    email_prompt="ACME 账号邮箱（默认：$EMAIL）："
   fi
   read -r -p "$email_prompt" answer
   EMAIL="${answer:-$EMAIL}"
   while ! is_valid_email "$EMAIL"; do
-    err "邮箱格式不正确: $EMAIL"
-    read -r -p "ACME 账号邮箱 (例如 admin@example.com): " EMAIL
+    err "邮箱格式不正确：$EMAIL"
+    read -r -p "ACME 账号邮箱（例如 admin@example.com）：" EMAIL
   done
 
   output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
-  read -r -p "证书输出目录 (默认: $output_default): " answer
+  read -r -p "证书输出目录（默认：$output_default）：" answer
   OUTPUT_DIR="${answer:-$output_default}"
-  OUTPUT_DIR="$(expand_home_path "$OUTPUT_DIR")"
 }
 
 validate_inputs() {
@@ -291,7 +272,7 @@ prompt_domain_value() {
       continue
     fi
     if ! is_valid_domain "$value"; then
-      err "域名格式不正确: $value"
+      err "域名格式不正确：$value"
       continue
     fi
     printf '%s\n' "$value"
@@ -299,15 +280,26 @@ prompt_domain_value() {
   done
 }
 
-list_certs() {
+get_cert_list_raw() {
   local raw_list=""
-  local data_count=0
-  local border=""
 
   if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
     err "$raw_list"
     return 1
   fi
+
+  printf '%s\n' "$raw_list"
+}
+
+extract_cert_domains() {
+  local raw_list="$1"
+  printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {print $1}'
+}
+
+print_cert_list() {
+  local raw_list="$1"
+  local data_count=0
+  local border=""
 
   data_count="$(printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {count++} END {print count+0}')"
   if [[ "$data_count" -eq 0 ]]; then
@@ -360,15 +352,11 @@ list_certs() {
   printf '\n'
 }
 
-get_cert_domains() {
+list_certs() {
   local raw_list=""
 
-  if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
-    err "$raw_list"
-    return 1
-  fi
-
-  printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {print $1}'
+  raw_list="$(get_cert_list_raw)" || return 1
+  print_cert_list "$raw_list"
 }
 
 create_cert() {
@@ -380,23 +368,20 @@ create_cert() {
 
   apply_dns_credentials
   issue_cert
-  install_cert
+  install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR"
 
-  log "完成: 域名 $DOMAIN 证书申请与部署成功"
-  log "续期由 acme.sh 自动任务处理，可手动测试: $ACME_SH --cron --home $ACME_HOME"
+  log "申请完成：$DOMAIN，证书目录：$OUTPUT_DIR（已启用自动续期）"
 }
 
 update_cert() {
   local target_domain=""
   local cert_dir=""
   local answer=""
-  local -a install_args=()
 
-  target_domain="$(prompt_domain_value "请输入要更新的域名: ")"
+  target_domain="$(prompt_domain_value "请输入要更新的域名：")"
   cert_dir="/etc/ssl/$target_domain"
-  read -r -p "证书输出目录 (默认: $cert_dir): " answer
+  read -r -p "证书输出目录（默认：$cert_dir）：" answer
   cert_dir="${answer:-$cert_dir}"
-  cert_dir="$(expand_home_path "$cert_dir")"
 
   if [[ -n "$CF_Key" && -n "$CF_Email" ]]; then
     apply_dns_credentials
@@ -405,45 +390,29 @@ update_cert() {
   log "开始更新证书..."
   "$ACME_SH" --renew -d "$target_domain" --force
 
-  mkdir -p "$cert_dir"
-  install_args=(
-    --install-cert
-    -d "$target_domain"
-    --key-file "$cert_dir/$target_domain.key"
-    --fullchain-file "$cert_dir/fullchain.cer"
-    --cert-file "$cert_dir/cert.cer"
-    --ca-file "$cert_dir/ca.cer"
-  )
-  if [[ -n "$RELOAD_CMD" ]]; then
-    install_args+=( --reloadcmd "$RELOAD_CMD" )
-  fi
-
-  "$ACME_SH" "${install_args[@]}"
-  chmod 600 "$cert_dir/$target_domain.key"
-  chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
-
-  log "证书更新完成: $target_domain"
-  log "证书已安装到: $cert_dir"
+  install_cert_to_dir "$target_domain" "$cert_dir"
+  log "更新完成：$target_domain -> $cert_dir"
 }
 
 delete_cert() {
   local target_domain=""
   local selector=""
+  local raw_list=""
   local domains=""
   local answer=""
   local cert_dir=""
   local acme_dir_rsa=""
   local acme_dir_ecc=""
 
-  list_certs || return 1
-  domains="$(get_cert_domains)" || return 1
+  raw_list="$(get_cert_list_raw)" || return 1
+  print_cert_list "$raw_list" || return 1
+  domains="$(extract_cert_domains "$raw_list")"
   if [[ -z "$domains" ]]; then
-    log "暂无可删除证书"
     return 0
   fi
 
   while true; do
-    read -r -p "请输入要删除的序号或域名（输入 0 返回）: " selector
+    read -r -p "请输入要删除的序号或域名（输入 0 返回）：" selector
     if [[ -z "$selector" ]]; then
       err "请输入序号或域名，或输入 0 返回"
       continue
@@ -457,8 +426,8 @@ delete_cert() {
     if [[ "$selector" =~ ^[0-9]+$ ]]; then
       target_domain="$(printf '%s\n' "$domains" | sed -n "${selector}p")"
       if [[ -z "$target_domain" ]]; then
-        err "无效序号: $selector"
-        continue
+      err "无效序号：$selector"
+      continue
       fi
       break
     fi
@@ -468,11 +437,11 @@ delete_cert() {
       break
     fi
 
-    err "未找到域名: $selector"
+    err "未找到域名：$selector"
   done
 
   "$ACME_SH" --remove -d "$target_domain"
-  log "证书已从管理列表移除: $target_domain"
+  log "证书已从管理列表移除：$target_domain"
 
   acme_dir_rsa="$ACME_HOME/$target_domain"
   acme_dir_ecc="$ACME_HOME/${target_domain}_ecc"
@@ -486,10 +455,10 @@ delete_cert() {
 
   cert_dir="/etc/ssl/$target_domain"
   if [[ -d "$cert_dir" ]]; then
-    read -r -p "是否删除本地证书目录 $cert_dir ? [y/N]: " answer
+    read -r -p "是否删除本地证书目录 $cert_dir？[y/N]：" answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
       rm -rf "$cert_dir"
-      log "已删除目录: $cert_dir"
+      log "已删除目录：$cert_dir"
     fi
   fi
 }
@@ -515,7 +484,7 @@ run_menu() {
   while true; do
     print_main_menu
 
-    read -r -p "请输入选择 [0-4]: " choice
+    read -r -p "请输入选择 [0-4]：" choice
     case "$choice" in
       1)
         list_certs
@@ -534,7 +503,7 @@ run_menu() {
         return
         ;;
       *)
-        err "无效选项: $choice"
+        err "无效选项：$choice"
         ;;
     esac
   done
