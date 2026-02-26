@@ -8,12 +8,11 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.8"
+readonly SCRIPT_VERSION="v1.0.0-beta.9"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
-RELOAD_CMD="${RELOAD_CMD:-}"
 CF_Key="${CF_Key:-}"
 CF_Email="${CF_Email:-}"
 ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
@@ -33,8 +32,8 @@ init_colors() {
     return
   fi
   COLOR_RESET=$'\033[0m'
-  COLOR_TITLE=$'\033[1;96m'
-  COLOR_INDEX=$'\033[1;96m'
+  COLOR_TITLE=$'\033[1;36m'
+  COLOR_INDEX=$'\033[1;36m'
   COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
@@ -138,7 +137,12 @@ install_deps() {
   esac
 
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl enable --now "$CRON_SERVICE" || true
+    if ! systemctl is-enabled "$CRON_SERVICE" >/dev/null 2>&1; then
+      systemctl enable "$CRON_SERVICE" || true
+    fi
+    if ! systemctl is-active "$CRON_SERVICE" >/dev/null 2>&1; then
+      systemctl start "$CRON_SERVICE" || true
+    fi
   fi
 }
 
@@ -166,12 +170,15 @@ prompt_install_email_if_needed() {
     EMAIL="$CF_Email"
   fi
 
-  while [[ -z "$EMAIL" ]]; do
-    read -r -p "首次安装需要邮箱, 请输入 ACME 账号邮箱: " EMAIL
-    if [[ -n "$EMAIL" ]] && ! is_valid_email "$EMAIL"; then
-      err "邮箱格式错误: $EMAIL"
-      EMAIL=""
+  while true; do
+    if [[ -z "$EMAIL" ]]; then
+      read -r -p "首次安装, 请输入 ACME 邮箱: " EMAIL
     fi
+    if is_valid_email "$EMAIL"; then
+      break
+    fi
+    err "邮箱格式错误: $EMAIL"
+    EMAIL=""
   done
 }
 
@@ -216,6 +223,64 @@ get_cert_conf_file() {
   return 1
 }
 
+get_cert_conf_path_by_variant() {
+  local domain="$1"
+  local variant="$2"
+
+  if [[ "$variant" == "ecc" ]]; then
+    printf '%s\n' "$ACME_HOME/${domain}_ecc/${domain}.conf"
+    return
+  fi
+  printf '%s\n' "$ACME_HOME/$domain/$domain.conf"
+}
+
+get_cert_dir_by_variant() {
+  local domain="$1"
+  local variant="$2"
+
+  if [[ "$variant" == "ecc" ]]; then
+    printf '%s\n' "$ACME_HOME/${domain}_ecc"
+    return
+  fi
+  printf '%s\n' "$ACME_HOME/$domain"
+}
+
+domain_has_existing_cert() {
+  local domain="$1"
+  get_cert_conf_file "$domain" >/dev/null 2>&1
+}
+
+cleanup_stale_domain_dirs() {
+  local domain="$1"
+  local ecc_conf=""
+  local rsa_conf=""
+  local ecc_dir=""
+  local rsa_dir=""
+
+  ecc_conf="$(get_cert_conf_path_by_variant "$domain" "ecc")"
+  rsa_conf="$(get_cert_conf_path_by_variant "$domain" "rsa")"
+  ecc_dir="$(get_cert_dir_by_variant "$domain" "ecc")"
+  rsa_dir="$(get_cert_dir_by_variant "$domain" "rsa")"
+
+  if [[ -d "$ecc_dir" && ! -f "$ecc_conf" ]]; then
+    rm -rf "$ecc_dir"
+  fi
+  if [[ -d "$rsa_dir" && ! -f "$rsa_conf" ]]; then
+    rm -rf "$rsa_dir"
+  fi
+}
+
+cleanup_domain_variant_dir() {
+  local domain="$1"
+  local variant="$2"
+  local cert_dir=""
+
+  cert_dir="$(get_cert_dir_by_variant "$domain" "$variant")"
+  if [[ -d "$cert_dir" ]]; then
+    rm -rf "$cert_dir"
+  fi
+}
+
 read_conf_value() {
   local conf_file="$1"
   local key="$2"
@@ -228,8 +293,11 @@ select_cert_variant_for_domain() {
   local has_ecc="0"
   local has_rsa="0"
   local answer=""
-  local ecc_conf="$ACME_HOME/${domain}_ecc/${domain}.conf"
-  local rsa_conf="$ACME_HOME/$domain/$domain.conf"
+  local ecc_conf=""
+  local rsa_conf=""
+
+  ecc_conf="$(get_cert_conf_path_by_variant "$domain" "ecc")"
+  rsa_conf="$(get_cert_conf_path_by_variant "$domain" "rsa")"
 
   if [[ -f "$ecc_conf" ]]; then
     has_ecc="1"
@@ -240,7 +308,7 @@ select_cert_variant_for_domain() {
 
   if [[ "$has_ecc" == "1" && "$has_rsa" == "1" ]]; then
     while true; do
-      read -r -p "检测到同域名存在 2 种证书, 请选择 [1] ECC, [2] RSA: " answer
+      read -r -p "检测到 ECC/RSA, 请选择 [1] ECC [2] RSA: " answer
       case "$answer" in
         1)
           printf -v "$target_var" '%s' "ecc"
@@ -414,10 +482,6 @@ install_cert_to_dir() {
 
   mkdir -p "$cert_dir"
 
-  if [[ -n "$RELOAD_CMD" ]]; then
-    install_args+=( --reloadcmd "$RELOAD_CMD" )
-  fi
-
   variant_flag="$(append_variant_flag "$cert_variant")"
   if [[ -n "$variant_flag" ]]; then
     install_args+=( "$variant_flag" )
@@ -433,16 +497,19 @@ prompt_existing_cert_domain() {
   local target_var="$1"
   local prompt="$2"
   local raw_list=""
+  local parsed_rows=""
   local domains=""
   local selected_domain=""
 
   raw_list="$(get_cert_list_raw)" || return 1
-  print_cert_list "$raw_list" || return 1
-
-  domains="$(extract_cert_domains "$raw_list")"
-  if [[ -z "$domains" ]]; then
+  parsed_rows="$(parse_cert_list_rows "$raw_list")"
+  if [[ -z "$parsed_rows" ]]; then
+    log "暂无证书"
     return 1
   fi
+
+  print_cert_list "$raw_list" "$parsed_rows" || return 1
+  domains="$(extract_cert_domains_from_rows "$parsed_rows")"
 
   while true; do
     selected_domain="$(prompt_domain_value "$prompt")"
@@ -567,12 +634,12 @@ prompt_output_dir() {
 
   while true; do
     output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
-    read -r -p "请输入证书输出目录 (默认: $output_default): " answer
+    read -r -p "输出目录 (默认: $output_default): " answer
     OUTPUT_DIR="${answer:-$output_default}"
     if [[ -n "$OUTPUT_DIR" ]]; then
       break
     fi
-    err "证书输出目录不能为空"
+    err "输出目录不能为空"
   done
 }
 
@@ -599,13 +666,66 @@ get_cert_list_raw() {
   "$ACME_SH" --list
 }
 
-extract_cert_domains() {
+parse_cert_list_rows() {
   local raw_list="$1"
-  printf '%s\n' "$raw_list" | awk 'NR>1 && NF>0 {print $1}'
+  printf '%s\n' "$raw_list" | awk '
+    NR == 1 { next }
+    NF == 0 { next }
+    {
+      start = 1
+      if ($1 ~ /^[0-9]+$/) {
+        start = 2
+      }
+
+      main_domain = $start
+      key_length = $(start + 1)
+      san_domains = $(start + 2)
+      remain = NF - (start + 2)
+      ca = "-"
+      created = "-"
+      renew = "-"
+      tail_count = 0
+
+      for (i = 1; i <= remain; i++) {
+        tail[++tail_count] = $(start + 2 + i)
+      }
+
+      # 从右向左识别时间戳列: Renew, Created
+      if (tail_count >= 1 && tail[tail_count] ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/) {
+        renew = tail[tail_count]
+        tail_count--
+      }
+      if (tail_count >= 1 && tail[tail_count] ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/) {
+        created = tail[tail_count]
+        tail_count--
+      }
+
+      # 剩余尾部最后一个字段视为 CA, 中间可能存在 Profile
+      if (tail_count >= 1) {
+        ca = tail[tail_count]
+      }
+
+      gsub(/"/, "", key_length)
+      if (san_domains == "no" || san_domains == "") san_domains = "-"
+      if (ca == "") ca = "-"
+      if (created == "") created = "-"
+      if (renew == "") renew = "-"
+
+      if (main_domain != "" && key_length != "") {
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, ca, created, renew
+      }
+    }
+  '
+}
+
+extract_cert_domains_from_rows() {
+  local parsed_rows="$1"
+  printf '%s\n' "$parsed_rows" | awk -F'\t' '{print $1}'
 }
 
 print_cert_list() {
   local raw_list="$1"
+  local parsed_rows="${2:-}"
   local border=""
   local row_variant=""
   local main_domain=""
@@ -623,8 +743,11 @@ print_cert_list() {
   local renew_fmt=""
   local install_dir_fmt=""
 
-  if [[ -z "$(extract_cert_domains "$raw_list")" ]]; then
-    log "当前没有证书"
+  if [[ -z "$parsed_rows" ]]; then
+    parsed_rows="$(parse_cert_list_rows "$raw_list")"
+  fi
+  if [[ -z "$parsed_rows" ]]; then
+    log "暂无证书"
     return 0
   fi
 
@@ -657,27 +780,7 @@ print_cert_list() {
       "$created_fmt" \
       "$renew_fmt" \
       "$install_dir_fmt"
-  done < <(
-    printf '%s\n' "$raw_list" | awk '
-      NR == 1 { next }
-      NF > 0 {
-        main_domain = $1
-        key_length = $2
-        san_domains = $3
-        ca = (NF >= 4 ? $4 : "-")
-        created = (NF >= 5 ? $5 : "-")
-        renew = (NF >= 6 ? $6 : "-")
-
-        gsub(/"/, "", key_length)
-        if (san_domains == "no" || san_domains == "") san_domains = "-"
-        if (ca == "") ca = "-"
-        if (created == "") created = "-"
-        if (renew == "") renew = "-"
-
-        printf "%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, ca, created, renew
-      }
-    '
-  )
+  done <<< "$parsed_rows"
 
   printf '%s\n' "$border"
 }
@@ -697,14 +800,25 @@ create_cert() {
 
   prompt_inputs
   prompt_issue_options
+  cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
+
+  if domain_has_existing_cert "$DOMAIN"; then
+    err "域名已存在证书: $DOMAIN"
+    return 1
+  fi
+
+  cleanup_stale_domain_dirs "$DOMAIN"
   prompt_output_dir
 
   apply_dns_credentials
-  issue_cert
-  cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
+  if ! issue_cert; then
+    cleanup_domain_variant_dir "$DOMAIN" "$cert_variant"
+    err "证书申请失败"
+    return 1
+  fi
   install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"
 
-  log "申请成功: $DOMAIN -> $OUTPUT_DIR"
+  log "创建成功: $DOMAIN -> $OUTPUT_DIR"
 }
 
 update_cert() {
@@ -714,18 +828,18 @@ update_cert() {
   local current_install_dir=""
   local answer=""
 
-  prompt_existing_cert_domain target_domain "请输入要更换安装目录的域名: " || return 1
+  prompt_existing_cert_domain target_domain "请输入更换目录的域名: " || return 1
   select_cert_variant_for_domain "$target_domain" cert_variant || return 1
   current_install_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   cert_dir="/etc/ssl/$target_domain"
   if [[ "$current_install_dir" != "-" ]]; then
     cert_dir="$current_install_dir"
   fi
-  read -r -p "请输入证书输出目录 (默认: $cert_dir): " answer
+  read -r -p "输出目录 (默认: $cert_dir): " answer
   cert_dir="${answer:-$cert_dir}"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
-  log "目录更换成功: $target_domain -> $cert_dir"
+  log "更换成功: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
@@ -746,11 +860,7 @@ delete_cert() {
   fi
   "$ACME_SH" "${remove_args[@]}"
 
-  if [[ "$cert_variant" == "ecc" ]]; then
-    acme_dir="$ACME_HOME/${target_domain}_ecc"
-  else
-    acme_dir="$ACME_HOME/$target_domain"
-  fi
+  acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   if [[ -d "$acme_dir" ]]; then
     rm -rf "$acme_dir"
   fi
