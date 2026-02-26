@@ -2,13 +2,13 @@
 
 set -euo pipefail
 
-readonly KEY_TYPE="ec-256"
-readonly CA_SERVER="letsencrypt"
+readonly DEFAULT_KEY_TYPE="ec-256"
+readonly DEFAULT_CA_SERVER="letsencrypt"
 readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.6"
+readonly SCRIPT_VERSION="v1.0.0-beta.7"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -16,6 +16,10 @@ OUTPUT_DIR="${OUTPUT_DIR:-}"
 RELOAD_CMD="${RELOAD_CMD:-}"
 CF_Key="${CF_Key:-}"
 CF_Email="${CF_Email:-}"
+ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
+ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
+ISSUE_INCLUDE_WILDCARD="0"
+ISSUE_FORCE_RENEW="0"
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
@@ -29,8 +33,8 @@ init_colors() {
     return
   fi
   COLOR_RESET=$'\033[0m'
-  COLOR_TITLE=$'\033[1;36m'
-  COLOR_INDEX=$'\033[1;36m'
+  COLOR_TITLE=$'\033[1;96m'
+  COLOR_INDEX=$'\033[1;96m'
   COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
@@ -150,7 +154,7 @@ install_acme_sh() {
   fi
 
   "$ACME_SH" --upgrade --auto-upgrade
-  "$ACME_SH" --set-default-ca --server "$CA_SERVER"
+  "$ACME_SH" --set-default-ca --server "$DEFAULT_CA_SERVER"
 }
 
 prompt_install_email_if_needed() {
@@ -217,14 +221,125 @@ append_variant_flag() {
   fi
 }
 
+key_type_to_variant() {
+  local key_type="$1"
+
+  if [[ "$key_type" == ec-* ]]; then
+    printf '%s\n' "ecc"
+    return
+  fi
+
+  printf '%s\n' "rsa"
+}
+
+prompt_issue_options() {
+  local answer=""
+  local answer_lower=""
+
+  ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
+  ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
+  ISSUE_INCLUDE_WILDCARD="0"
+  ISSUE_FORCE_RENEW="0"
+
+  while true; do
+    read -r -p "密钥类型 [1] ec-256 (默认), [2] ec-384, [3] rsa-2048, [4] rsa-4096: " answer
+    case "$answer" in
+      ""|1)
+        ISSUE_KEY_TYPE="ec-256"
+        break
+        ;;
+      2)
+        ISSUE_KEY_TYPE="ec-384"
+        break
+        ;;
+      3)
+        ISSUE_KEY_TYPE="2048"
+        break
+        ;;
+      4)
+        ISSUE_KEY_TYPE="4096"
+        break
+        ;;
+      *)
+        err "密钥类型选项无效, 请重新输入"
+        ;;
+    esac
+  done
+
+  while true; do
+    read -r -p "CA [1] letsencrypt (默认), [2] zerossl, [3] buypass: " answer
+    case "$answer" in
+      ""|1)
+        ISSUE_CA_SERVER="letsencrypt"
+        break
+        ;;
+      2)
+        ISSUE_CA_SERVER="zerossl"
+        break
+        ;;
+      3)
+        ISSUE_CA_SERVER="buypass"
+        break
+        ;;
+      *)
+        err "CA 选项无效, 请重新输入"
+        ;;
+    esac
+  done
+
+  while true; do
+    read -r -p "是否包含泛域名 *.$DOMAIN [y/N]: " answer
+    answer_lower="${answer,,}"
+    case "$answer_lower" in
+      ""|n|no)
+        ISSUE_INCLUDE_WILDCARD="0"
+        break
+        ;;
+      y|yes)
+        ISSUE_INCLUDE_WILDCARD="1"
+        break
+        ;;
+      *)
+        err "请输入 y 或 n"
+        ;;
+    esac
+  done
+
+  while true; do
+    read -r -p "是否强制重新签发 [y/N]: " answer
+    answer_lower="${answer,,}"
+    case "$answer_lower" in
+      ""|n|no)
+        ISSUE_FORCE_RENEW="0"
+        break
+        ;;
+      y|yes)
+        ISSUE_FORCE_RENEW="1"
+        break
+        ;;
+      *)
+        err "请输入 y 或 n"
+        ;;
+    esac
+  done
+}
+
 issue_cert() {
   local -a issue_args=(
     --issue
-    --keylength "$KEY_TYPE"
-    --server "$CA_SERVER"
+    --keylength "$ISSUE_KEY_TYPE"
+    --server "$ISSUE_CA_SERVER"
     --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
+
+  if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
+    issue_args+=( --domain "*.$DOMAIN" )
+  fi
+
+  if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
+    issue_args+=( --force )
+  fi
 
   "$ACME_SH" "${issue_args[@]}"
 }
@@ -510,15 +625,19 @@ list_certs() {
 }
 
 create_cert() {
+  local cert_variant=""
+
   DOMAIN=""
   OUTPUT_DIR=""
 
   prompt_inputs
+  prompt_issue_options
   validate_inputs
 
   apply_dns_credentials
   issue_cert
-  install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR"
+  cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
+  install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"
 
   log "申请成功: $DOMAIN -> $OUTPUT_DIR"
 }
