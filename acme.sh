@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.28"
+readonly SCRIPT_VERSION="v1.0.0-beta.29"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -42,8 +42,7 @@ curl_https() {
 }
 
 curl_script_raw() {
-  # 使用时间戳避免 CDN 返回旧缓存版本
-  curl_https "$@" "${SCRIPT_RAW_URL}?ts=$(date +%s)"
+  curl_https "$@" "$SCRIPT_RAW_URL"
 }
 
 resolve_script_path() {
