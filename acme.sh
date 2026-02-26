@@ -63,6 +63,21 @@ ensure_valid_email() {
   is_valid_email "$value" || die "$field 格式不正确: $value"
 }
 
+expand_home_path() {
+  local path="$1"
+  case "$path" in
+    "~")
+      printf '%s\n' "$HOME"
+      ;;
+    "~/"*)
+      printf '%s/%s\n' "$HOME" "${path#~/}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
 is_valid_domain() {
   local d="$1"
   [[ "$d" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
@@ -213,6 +228,7 @@ install_cert() {
 prompt_inputs() {
   local answer=""
   local output_default=""
+  local email_prompt=""
 
   while [[ -z "$DOMAIN" ]]; do
     read -r -p "域名 (例如 example.com): " DOMAIN
@@ -239,8 +255,11 @@ prompt_inputs() {
 
   if [[ -z "$EMAIL" ]]; then
     EMAIL="$CF_Email"
+    email_prompt="ACME 账号邮箱 (默认与 CF_Email 相同: $EMAIL): "
+  else
+    email_prompt="ACME 账号邮箱 (默认: $EMAIL): "
   fi
-  read -r -p "ACME 账号邮箱 (默认: $EMAIL): " answer
+  read -r -p "$email_prompt" answer
   EMAIL="${answer:-$EMAIL}"
   while ! is_valid_email "$EMAIL"; do
     err "邮箱格式不正确: $EMAIL"
@@ -250,6 +269,7 @@ prompt_inputs() {
   output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
   read -r -p "证书输出目录 (默认: $output_default): " answer
   OUTPUT_DIR="${answer:-$output_default}"
+  OUTPUT_DIR="$(expand_home_path "$OUTPUT_DIR")"
 }
 
 validate_inputs() {
@@ -363,6 +383,7 @@ update_cert() {
   cert_dir="/etc/ssl/$target_domain"
   read -r -p "证书输出目录 (默认: $cert_dir): " answer
   cert_dir="${answer:-$cert_dir}"
+  cert_dir="$(expand_home_path "$cert_dir")"
 
   if [[ -n "$CF_Key" && -n "$CF_Email" ]]; then
     apply_dns_credentials
