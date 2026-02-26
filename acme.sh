@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.32"
+readonly SCRIPT_VERSION="v1.0.0-beta.33"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -722,9 +722,10 @@ prompt_option_with_default() {
   done
 }
 
-prompt_yes_no_default_no() {
+prompt_yes_no_with_default() {
   local target_var="$1"
   local prompt="$2"
+  local default_value="${3:-0}"
   local answer=""
   local answer_lower=""
 
@@ -732,7 +733,11 @@ prompt_yes_no_default_no() {
     read -r -p "$prompt" answer
     answer_lower="${answer,,}"
     case "$answer_lower" in
-      ""|n|no)
+      "")
+        printf -v "$target_var" '%s' "$default_value"
+        return
+        ;;
+      n|no)
         printf -v "$target_var" '%s' "0"
         return
         ;;
@@ -747,16 +752,38 @@ prompt_yes_no_default_no() {
   done
 }
 
+normalize_issue_options() {
+  case "$ISSUE_KEY_TYPE" in
+    ec-256|ec-384|2048|4096) ;;
+    *) ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE" ;;
+  esac
+
+  case "$ISSUE_CA_SERVER" in
+    letsencrypt|zerossl|buypass) ;;
+    *) ISSUE_CA_SERVER="$DEFAULT_CA_SERVER" ;;
+  esac
+
+  case "$ISSUE_INCLUDE_WILDCARD" in
+    0|1) ;;
+    *) ISSUE_INCLUDE_WILDCARD="0" ;;
+  esac
+
+  case "$ISSUE_FORCE_RENEW" in
+    0|1) ;;
+    *) ISSUE_FORCE_RENEW="0" ;;
+  esac
+}
+
 prompt_issue_options() {
-  ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
-  ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
-  ISSUE_INCLUDE_WILDCARD="0"
-  ISSUE_FORCE_RENEW="0"
+  local wildcard_prompt="是否包含泛域名 *.$DOMAIN [y/N]: "
+  local force_renew_prompt="是否强制重新签发 [y/N]: "
+
+  normalize_issue_options
 
   prompt_option_with_default \
     ISSUE_KEY_TYPE \
-    "密钥类型 [1] ec-256 (默认), [2] ec-384, [3] rsa-2048, [4] rsa-4096: " \
-    "ec-256" \
+    "密钥类型 [1] ec-256, [2] ec-384, [3] rsa-2048, [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
+    "$ISSUE_KEY_TYPE" \
     "密钥类型选项无效, 请重新输入" \
     "1" "ec-256" \
     "2" "ec-384" \
@@ -765,15 +792,22 @@ prompt_issue_options() {
 
   prompt_option_with_default \
     ISSUE_CA_SERVER \
-    "CA [1] letsencrypt (默认), [2] zerossl, [3] buypass: " \
-    "letsencrypt" \
+    "CA [1] letsencrypt, [2] zerossl, [3] buypass (默认: $ISSUE_CA_SERVER): " \
+    "$ISSUE_CA_SERVER" \
     "CA 选项无效, 请重新输入" \
     "1" "letsencrypt" \
     "2" "zerossl" \
     "3" "buypass"
 
-  prompt_yes_no_default_no ISSUE_INCLUDE_WILDCARD "是否包含泛域名 *.$DOMAIN [y/N]: "
-  prompt_yes_no_default_no ISSUE_FORCE_RENEW "是否强制重新签发 [y/N]: "
+  if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
+    wildcard_prompt="是否包含泛域名 *.$DOMAIN [Y/n]: "
+  fi
+  if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
+    force_renew_prompt="是否强制重新签发 [Y/n]: "
+  fi
+
+  prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
+  prompt_yes_no_with_default ISSUE_FORCE_RENEW "$force_renew_prompt" "$ISSUE_FORCE_RENEW"
 }
 
 issue_cert() {
