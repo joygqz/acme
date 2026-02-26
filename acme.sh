@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0"
+readonly SCRIPT_VERSION="v1.0.0-beta.1"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -55,7 +55,7 @@ die() {
 ensure_not_empty() {
   local field="$1"
   local value="$2"
-  [[ -n "$value" ]] || die "$field 不能为空."
+  [[ -n "$value" ]] || die "$field 不能为空"
 }
 
 ensure_valid_domain() {
@@ -82,7 +82,7 @@ is_valid_email() {
 }
 
 require_root() {
-  [[ "${EUID}" -eq 0 ]] || die "请使用 root 用户运行脚本."
+  [[ "${EUID}" -eq 0 ]] || die "请使用 root 用户运行脚本"
 }
 
 detect_os() {
@@ -90,7 +90,7 @@ detect_os() {
   local os_like=""
 
   if [[ ! -f /etc/os-release ]]; then
-    die "无法识别系统, 缺少 /etc/os-release."
+    die "无法识别系统, 缺少 /etc/os-release"
   fi
 
   # shellcheck disable=SC1091
@@ -110,7 +110,7 @@ detect_os() {
     fi
     CRON_SERVICE="crond"
   else
-    die "暂不支持该系统: ID=${os_id}, ID_LIKE=${os_like}."
+    die "暂不支持该系统: ID=${os_id}, ID_LIKE=${os_like}"
   fi
 
 }
@@ -118,21 +118,21 @@ detect_os() {
 install_deps() {
   case "$PKG_TYPE" in
     apt)
-      command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令."
+      command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get 命令"
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y curl socat cron openssl ca-certificates
       ;;
     yum)
-      command -v yum >/dev/null 2>&1 || die "缺少 yum 命令."
+      command -v yum >/dev/null 2>&1 || die "缺少 yum 命令"
       yum install -y curl socat cronie openssl ca-certificates
       ;;
     dnf)
-      command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令."
+      command -v dnf >/dev/null 2>&1 || die "缺少 dnf 命令"
       dnf install -y curl socat cronie openssl ca-certificates
       ;;
     *)
-      die "未知包管理器: $PKG_TYPE."
+      die "未知包管理器: $PKG_TYPE"
       ;;
   esac
 
@@ -143,18 +143,18 @@ install_deps() {
 
 install_acme_sh() {
   if [[ ! -x "$ACME_SH" ]]; then
-    log "正在安装 acme.sh..."
+    log "正在安装 acme.sh"
     curl -fsSL "$ACME_INSTALL_URL" | sh -s email="$EMAIL"
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    die "acme.sh 安装失败, 未找到文件: $ACME_SH."
+    die "acme.sh 安装失败, 未找到文件: $ACME_SH"
   fi
 
   if ! "$ACME_SH" --upgrade --auto-upgrade >/dev/null 2>&1; then
-    err "acme.sh 自动升级失败, 将继续使用当前版本."
+    err "acme.sh 自动升级失败, 将继续使用当前版本"
   fi
-  "$ACME_SH" --set-default-ca --server "$CA_SERVER" >/dev/null 2>&1 || die "设置默认 CA 失败."
+  "$ACME_SH" --set-default-ca --server "$CA_SERVER" >/dev/null 2>&1 || die "设置默认 CA 失败"
 }
 
 prompt_install_email_if_needed() {
@@ -180,7 +180,7 @@ run_acme_cmd() {
   shift
 
   if ! LAST_ACME_OUTPUT="$("$ACME_SH" "$@" 2>&1)"; then
-    err "$action 失败."
+    err "$action 失败"
     [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
     return 1
   fi
@@ -285,7 +285,7 @@ renew_cert_with_fallback() {
     done
   fi
 
-  err "证书更新失败."
+  err "证书更新失败"
   [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
   return 1
 }
@@ -326,7 +326,7 @@ remove_cert_with_fallback() {
     return 0
   fi
 
-  err "证书删除失败."
+  err "证书删除失败"
   [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
   return 1
 }
@@ -339,7 +339,7 @@ issue_cert() {
     --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
-  log "正在申请证书..."
+  log "正在申请证书"
   run_acme_cmd "证书申请" "${issue_args[@]}"
 }
 
@@ -399,7 +399,7 @@ prompt_existing_cert_domain() {
       printf -v "$target_var" '%s' "$selected_domain"
       return 0
     fi
-    err "证书不存在: $selected_domain."
+    err "证书不存在: $selected_domain"
   done
 }
 
@@ -420,11 +420,19 @@ remove_dir_if_safe() {
   [[ "$path" != "-" ]] || return 1
   [[ -d "$path" ]] || return 1
   if ! is_safe_delete_dir "$path"; then
-    err "目录未删除, 路径不安全: $path."
+    err "目录未删除, 路径不安全: $path"
     return 1
   fi
   rm -rf "$path"
   return 0
+}
+
+confirm_yes() {
+  local prompt="$1"
+  local answer=""
+
+  read -r -p "$prompt [y/N]: " answer
+  [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 trim_outer_quotes() {
@@ -506,7 +514,7 @@ prompt_inputs() {
   while [[ -z "$CF_Key" ]]; do
     read -r -p "请输入 Cloudflare API Key (CF_Key): " CF_Key
     if [[ -z "$CF_Key" ]]; then
-      err "CF_Key 不能为空."
+      err "CF_Key 不能为空"
     fi
   done
 
@@ -543,7 +551,7 @@ prompt_domain_value() {
   while true; do
     read -r -p "$prompt" value
     if [[ -z "$value" ]]; then
-      err "域名不能为空."
+      err "域名不能为空"
       continue
     fi
     if ! is_valid_domain "$value"; then
@@ -559,7 +567,7 @@ get_cert_list_raw() {
   local raw_list=""
 
   if ! raw_list="$("$ACME_SH" --list 2>&1)"; then
-    err "读取证书列表失败."
+    err "读取证书列表失败"
     [[ -n "$raw_list" ]] && err "$raw_list"
     return 1
   fi
@@ -592,7 +600,7 @@ print_cert_list() {
   local install_dir_fmt=""
 
   if [[ -z "$(extract_cert_domains "$raw_list")" ]]; then
-    log "当前没有证书."
+    log "当前没有证书"
     return 0
   fi
 
@@ -669,7 +677,7 @@ create_cert() {
   issue_cert
   install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR"
 
-  log "申请成功: $DOMAIN -> $OUTPUT_DIR, 自动续期已启用."
+  log "申请成功: $DOMAIN -> $OUTPUT_DIR, 自动续期已启用"
 }
 
 update_cert() {
@@ -677,6 +685,7 @@ update_cert() {
   local cert_variant=""
   local cert_dir=""
   local current_install_dir=""
+  local old_install_dir_deleted=0
   local answer=""
   local select_rc=0
 
@@ -703,11 +712,24 @@ update_cert() {
     apply_dns_credentials
   fi
 
-  log "正在更新证书..."
+  log "正在更新证书"
   renew_cert_with_fallback "$target_domain" "$cert_variant"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
-  log "更新成功: $target_domain -> $cert_dir."
+
+  if [[ "$current_install_dir" != "-" && "$current_install_dir" != "$cert_dir" && -d "$current_install_dir" ]]; then
+    if confirm_yes "是否删除旧安装目录 $current_install_dir"; then
+      if remove_dir_if_safe "$current_install_dir"; then
+        old_install_dir_deleted=1
+      fi
+    fi
+  fi
+
+  if [[ "$old_install_dir_deleted" -eq 1 ]]; then
+    log "更新成功: $target_domain -> $cert_dir, 旧目录已删除"
+    return
+  fi
+  log "更新成功: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
@@ -717,6 +739,7 @@ delete_cert() {
   local cert_dir_default=""
   local acme_dir_rsa=""
   local acme_dir_ecc=""
+  local delete_installed_certs=0
   local removed_local_dirs=0
   local select_rc=0
 
@@ -745,18 +768,28 @@ delete_cert() {
     rm -rf "$acme_dir_ecc"
   fi
 
-  if remove_dir_if_safe "$install_dir"; then
-    removed_local_dirs=1
-  fi
-  if [[ "$cert_dir_default" != "$install_dir" ]] && remove_dir_if_safe "$cert_dir_default"; then
-    removed_local_dirs=1
+  if confirm_yes "是否删除已安装证书目录"; then
+    delete_installed_certs=1
   fi
 
-  if [[ "$removed_local_dirs" -eq 1 ]]; then
-    log "删除成功: $target_domain, 目录已清理."
+  if [[ "$delete_installed_certs" -eq 1 ]]; then
+    if remove_dir_if_safe "$install_dir"; then
+      removed_local_dirs=1
+    fi
+    if [[ "$cert_dir_default" != "$install_dir" ]] && remove_dir_if_safe "$cert_dir_default"; then
+      removed_local_dirs=1
+    fi
+  fi
+
+  if [[ "$delete_installed_certs" -eq 1 && "$removed_local_dirs" -eq 1 ]]; then
+    log "删除成功: $target_domain, 目录已清理"
     return
   fi
-  log "删除成功: $target_domain."
+  if [[ "$delete_installed_certs" -eq 1 ]]; then
+    log "删除成功: $target_domain, 未删除任何安装目录"
+    return
+  fi
+  log "删除成功: $target_domain"
 }
 
 print_main_menu() {
@@ -795,11 +828,11 @@ run_menu() {
         delete_cert
         ;;
       0)
-        log "已退出."
+        log "已退出"
         return
         ;;
       *)
-        err "无效选项: $choice."
+        err "无效选项: $choice"
         ;;
     esac
   done
