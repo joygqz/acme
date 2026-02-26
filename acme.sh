@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.14"
+readonly SCRIPT_VERSION="v1.0.0-beta.15"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 
 DOMAIN="${DOMAIN:-}"
@@ -36,6 +36,8 @@ LOCK_FD=""
 DIR_LOCK_DIR=""
 DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
+UPDATE_CHECKED_VERSION=""
+UPDATE_CHECK_STATUS="unchecked"
 
 curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
@@ -109,15 +111,22 @@ check_script_update() {
   local remote_version=""
 
   if ! remote_version="$(fetch_remote_script_version)"; then
+    UPDATE_AVAILABLE_VERSION=""
+    UPDATE_CHECKED_VERSION=""
+    UPDATE_CHECK_STATUS="failed"
     return
   fi
 
+  UPDATE_CHECKED_VERSION="$remote_version"
+
   if ! is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     UPDATE_AVAILABLE_VERSION=""
+    UPDATE_CHECK_STATUS="latest"
     return
   fi
 
   UPDATE_AVAILABLE_VERSION="$remote_version"
+  UPDATE_CHECK_STATUS="available"
 }
 
 get_process_start_token() {
@@ -1221,7 +1230,7 @@ update_cert() {
   local current_install_dir=""
   local answer=""
 
-  prompt_existing_cert_domain target_domain "请输入更换目录的域名: " || return 1
+  prompt_existing_cert_domain target_domain "请输入要更换安装目录的域名: " || return 1
   select_cert_variant_for_domain "$target_domain" cert_variant || return 1
   current_install_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   cert_dir="/etc/ssl/$target_domain"
@@ -1310,6 +1319,8 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
+    UPDATE_CHECKED_VERSION="$new_version"
+    UPDATE_CHECK_STATUS="latest"
     if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
       log "已是最新版本: $SCRIPT_VERSION"
     else
@@ -1325,6 +1336,8 @@ update_script() {
   fi
 
   UPDATE_AVAILABLE_VERSION=""
+  UPDATE_CHECKED_VERSION=""
+  UPDATE_CHECK_STATUS="unchecked"
   log "更新成功: $SCRIPT_VERSION -> $new_version, 正在重启脚本"
   release_lock
   exec bash "$script_path"
@@ -1334,9 +1347,21 @@ update_script() {
 print_main_menu() {
   local update_label="更新脚本"
 
-  if [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-    update_label="更新脚本 (最新: $UPDATE_AVAILABLE_VERSION)"
-  fi
+  case "$UPDATE_CHECK_STATUS" in
+    available)
+      update_label="更新脚本 (最新: $UPDATE_AVAILABLE_VERSION)"
+      ;;
+    latest)
+      if [[ -n "$UPDATE_CHECKED_VERSION" ]]; then
+        update_label="更新脚本 (已最新: $UPDATE_CHECKED_VERSION)"
+      else
+        update_label="更新脚本 (已最新)"
+      fi
+      ;;
+    failed)
+      update_label="更新脚本 (检查失败)"
+      ;;
+  esac
 
   printf '\n'
   printf '%s=== ACME 证书管理 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
