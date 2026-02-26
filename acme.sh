@@ -22,6 +22,7 @@ LAST_ACME_OUTPUT=""
 COLOR_RESET=""
 COLOR_TITLE=""
 COLOR_INDEX=""
+COLOR_ERROR=""
 
 init_colors() {
   if [[ "${NO_COLOR:-}" == "1" || "${NO_COLOR:-}" == "true" ]]; then
@@ -30,6 +31,7 @@ init_colors() {
   COLOR_RESET=$'\033[0m'
   COLOR_TITLE=$'\033[1;36m'
   COLOR_INDEX=$'\033[1;36m'
+  COLOR_ERROR=$'\033[1;31m'
 }
 
 log() {
@@ -37,6 +39,10 @@ log() {
 }
 
 err() {
+  if [[ -n "$COLOR_ERROR" ]]; then
+    echo "${COLOR_ERROR}ERROR: $*${COLOR_RESET}" >&2
+    return
+  fi
   echo "ERROR: $*" >&2
 }
 
@@ -376,7 +382,7 @@ prompt_existing_cert_domain() {
   local prompt="$2"
   local raw_list=""
   local domains=""
-  local target_domain=""
+  local selected_domain=""
 
   raw_list="$(get_cert_list_raw)" || return 1
   print_cert_list "$raw_list" || return 1
@@ -387,12 +393,12 @@ prompt_existing_cert_domain() {
   fi
 
   while true; do
-    target_domain="$(prompt_domain_value "$prompt")"
-    if printf '%s\n' "$domains" | grep -Fxq -- "$target_domain"; then
-      printf -v "$target_var" '%s' "$target_domain"
+    selected_domain="$(prompt_domain_value "$prompt")"
+    if printf '%s\n' "$domains" | grep -Fxq -- "$selected_domain"; then
+      printf -v "$target_var" '%s' "$selected_domain"
       return 0
     fi
-    err "证书不存在: $target_domain."
+    err "证书不存在: $selected_domain."
   done
 }
 
