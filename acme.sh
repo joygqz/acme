@@ -8,7 +8,7 @@ readonly DNS_PROVIDER="dns_cf"
 readonly ACME_HOME="/root/.acme.sh"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_VERSION="v1.0.0-beta.1"
+readonly SCRIPT_VERSION="v1.0.0-beta.2"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -23,7 +23,6 @@ LAST_ACME_OUTPUT=""
 COLOR_RESET=""
 COLOR_TITLE=""
 COLOR_INDEX=""
-COLOR_ERROR=""
 COLOR_ERROR_TEXT=""
 
 init_colors() {
@@ -33,7 +32,6 @@ init_colors() {
   COLOR_RESET=$'\033[0m'
   COLOR_TITLE=$'\033[1;36m'
   COLOR_INDEX=$'\033[1;36m'
-  COLOR_ERROR=$'\033[1;31m'
   COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
@@ -42,7 +40,7 @@ log() {
 }
 
 err() {
-  if [[ -n "$COLOR_ERROR" ]]; then
+  if [[ -n "$COLOR_ERROR_TEXT" ]]; then
     echo "${COLOR_ERROR_TEXT}$*${COLOR_RESET}" >&2
     return
   fi
@@ -182,7 +180,7 @@ run_acme_cmd() {
   shift
 
   if ! LAST_ACME_OUTPUT="$("$ACME_SH" "$@" 2>&1)"; then
-    err "$action 失败"
+    err "${action}失败"
     [[ -n "$LAST_ACME_OUTPUT" ]] && err "$LAST_ACME_OUTPUT"
     return 1
   fi
