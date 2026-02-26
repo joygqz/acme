@@ -12,7 +12,7 @@ readonly ACME_HOME
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
-readonly SCRIPT_VERSION="v1.0.0-beta.19"
+readonly SCRIPT_VERSION="v1.0.0-beta.20"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
 readonly UPDATE_CACHE_FILE="$ACME_HOME/.script_update_version"
 
@@ -46,20 +46,20 @@ build_script_raw_url_with_no_cache() {
   printf '%s?nocache=%s_%s_%s\n' "$SCRIPT_RAW_URL" "$(date +%s)" "$$" "$RANDOM"
 }
 
-fetch_remote_script_stream() {
-  curl_https --retry 2 --retry-delay 1 --connect-timeout 5 \
+curl_script_raw_no_cache() {
+  curl_https "$@" \
     -H "Cache-Control: no-cache, no-store, max-age=0" \
     -H "Pragma: no-cache" \
     "$(build_script_raw_url_with_no_cache)"
 }
 
+fetch_remote_script_stream() {
+  curl_script_raw_no_cache --retry 2 --retry-delay 1 --connect-timeout 5 --max-time 12
+}
+
 download_remote_script_file() {
   local output_file="$1"
-  curl_https --retry 3 --retry-delay 1 --connect-timeout 10 \
-    -H "Cache-Control: no-cache, no-store, max-age=0" \
-    -H "Pragma: no-cache" \
-    "$(build_script_raw_url_with_no_cache)" \
-    -o "$output_file"
+  curl_script_raw_no_cache --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 -o "$output_file"
 }
 
 resolve_script_path() {
@@ -115,7 +115,7 @@ read_cached_update_version() {
     return 1
   fi
 
-  if ! IFS= read -r cached_version < "$UPDATE_CACHE_FILE"; then
+  if ! IFS= read -r cached_version < "$UPDATE_CACHE_FILE" && [[ -z "$cached_version" ]]; then
     return 1
   fi
   cached_version="${cached_version%$'\r'}"
@@ -249,7 +249,7 @@ acquire_lock() {
 
   mkdir -p "$(dirname "$LOCK_FILE")"
 
-  if command -v flock >/dev/null 2>&1; then
+  if command_exists flock; then
     exec {LOCK_FD}> "$LOCK_FILE"
     if ! flock -n "$LOCK_FD"; then
       lock_conflict
@@ -1373,7 +1373,7 @@ update_script() {
     if [[ "$new_version" == "$SCRIPT_VERSION" ]]; then
       log "已是最新版本: $SCRIPT_VERSION"
     else
-      log "远端版本较旧, 跳过更新: $new_version (当前: $SCRIPT_VERSION)"
+      log "未检测到新版本: 远端 $new_version, 当前 $SCRIPT_VERSION"
     fi
     return 0
   fi
