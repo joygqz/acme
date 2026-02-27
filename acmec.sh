@@ -16,7 +16,6 @@ readonly SCRIPT_VERSION="v1.0.0"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
-readonly CACHE_LEGACY_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
 readonly CACHE_SECRETS_DIR="$CACHE_HOME/secrets.d"
 readonly CACHE_SCHEMA_VERSION="2"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
@@ -341,18 +340,11 @@ load_cached_secrets() {
   secrets_file="$CACHE_SECRETS_DIR/${provider_slug}.tsv"
   if cached_value="$(read_cache_entry "$secrets_file" "DNS_API_ENV_VARS" 2>/dev/null)"; then
     DNS_API_ENV_VARS="$cached_value"
-    return 0
-  fi
-
-  # Fallback for older single-file cache.
-  if cached_value="$(read_cache_entry "$CACHE_LEGACY_SECRETS_FILE" "DNS_API_ENV_VARS" 2>/dev/null)"; then
-    DNS_API_ENV_VARS="$cached_value"
   fi
 }
 
 reset_persistent_cache_files() {
   remove_file_quietly "$CACHE_PREFS_FILE"
-  remove_file_quietly "$CACHE_LEGACY_SECRETS_FILE"
   remove_dir_recursively_if_exists "$CACHE_SECRETS_DIR" || true
 }
 
@@ -413,9 +405,6 @@ save_cached_secrets() {
   secrets_file="$CACHE_SECRETS_DIR/${provider_slug}.tsv"
   write_cache_entries "$secrets_file" \
     "DNS_API_ENV_VARS" "${DNS_API_ENV_VARS:-}"
-
-  # Drop old single-file cache after migration.
-  remove_file_quietly "$CACHE_LEGACY_SECRETS_FILE"
 }
 
 save_persistent_cache() {
@@ -1549,7 +1538,10 @@ update_script() {
 }
 
 uninstall_script() {
-  local script_path
+  local confirmed script_path
+
+  prompt_yes_no_with_default confirmed "确认卸载并清理数据? [y/N]: " "0"
+  [[ "$confirmed" == "1" ]] || { log "卸载已取消"; return 0; }
 
   if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 ACME 客户端: $ACME_SH"

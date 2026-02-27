@@ -13,3 +13,9 @@ curl -fsSL https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh -o ./acme
   && chmod +x ./acmec.sh \
   && ./acmec.sh
 ```
+
+## 后续运行
+
+```bash
+./acmec.sh
+```
