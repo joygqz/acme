@@ -20,6 +20,8 @@ readonly SCRIPT_CHECK_MAX_TIME="15"
 readonly SCRIPT_UPDATE_CONNECT_TIMEOUT="10"
 readonly SCRIPT_UPDATE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
+readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
+readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新安装目录" "删除证书" "更新脚本" "卸载并删除脚本" )
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -47,12 +49,8 @@ curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
 }
 
-curl_script_raw() {
-  curl_https "$@" "$SCRIPT_RAW_URL"
-}
-
 curl_script_raw_retry() {
-  curl_script_raw --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" "$@"
+  curl_https --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" "$@" "$SCRIPT_RAW_URL"
 }
 
 resolve_script_path() {
@@ -69,20 +67,6 @@ resolve_script_path() {
   fi
 
   printf '%s\n' "$source_path"
-}
-
-ensure_file_exists_and_writable() {
-  local file_path="$1"
-
-  if [[ ! -f "$file_path" ]]; then
-    err "未找到脚本文件: $file_path"
-    return 1
-  fi
-
-  if [[ ! -w "$file_path" ]]; then
-    err "脚本文件不可写: $file_path"
-    return 1
-  fi
 }
 
 extract_script_version() {
@@ -274,10 +258,12 @@ remove_file_and_error() {
   err "$*"
 }
 
-arm_dir_lock_cleanup() {
+write_dir_lock_state() {
   local lock_dir="$1"
   local pid_file="$2"
-
+  local self_start_token
+  self_start_token="$(get_process_start_token "$$")"
+  printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
   DIR_LOCK_DIR="$lock_dir"
   DIR_LOCK_PID_FILE="$pid_file"
   trap 'remove_file_quietly "$DIR_LOCK_PID_FILE"; remove_empty_dir_quietly "$DIR_LOCK_DIR"' EXIT
@@ -289,7 +275,7 @@ lock_conflict() {
 
 acquire_lock() {
   local lock_dir pid_file
-  local lock_pid lock_start_token current_start_token self_start_token
+  local lock_pid lock_start_token current_start_token
   mkdir -p "$(dirname "$LOCK_FILE")"
 
   if command_exists flock; then
@@ -304,9 +290,7 @@ acquire_lock() {
   pid_file="$lock_dir/pid"
 
   if mkdir "$lock_dir" 2>/dev/null; then
-    self_start_token="$(get_process_start_token "$$")"
-    printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
-    arm_dir_lock_cleanup "$lock_dir" "$pid_file"
+    write_dir_lock_state "$lock_dir" "$pid_file"
     return
   fi
 
@@ -314,13 +298,7 @@ acquire_lock() {
     read -r lock_pid lock_start_token < "$pid_file" || true
     if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
       current_start_token="$(get_process_start_token "$lock_pid")"
-      if [[ -z "$lock_start_token" ]]; then
-        lock_conflict
-      fi
-      if [[ -z "$current_start_token" ]]; then
-        lock_conflict
-      fi
-      if [[ "$lock_start_token" == "$current_start_token" ]]; then
+      if [[ -z "$lock_start_token" || -z "$current_start_token" || "$lock_start_token" == "$current_start_token" ]]; then
         lock_conflict
       fi
     fi
@@ -328,9 +306,7 @@ acquire_lock() {
 
   remove_file_quietly "$pid_file"
   if rmdir "$lock_dir" >/dev/null 2>&1 && mkdir "$lock_dir" 2>/dev/null; then
-    self_start_token="$(get_process_start_token "$$")"
-    printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
-    arm_dir_lock_cleanup "$lock_dir" "$pid_file"
+    write_dir_lock_state "$lock_dir" "$pid_file"
     return
   fi
 
@@ -418,16 +394,21 @@ read_prompt_value() {
   local target_var="$1"
   local prompt="$2"
   local hidden="${3:-0}"
-  local value
+  local input_value=""
+  local read_status=0
 
   if [[ "$hidden" == "1" ]]; then
-    read -r -s -p "$prompt" value
+    IFS= read -r -s -p "$prompt" input_value || read_status=$?
     printf '\n'
   else
-    read -r -p "$prompt" value
+    IFS= read -r -p "$prompt" input_value || read_status=$?
   fi
 
-  printf -v "$target_var" '%s' "$value"
+  if ((read_status != 0)); then
+    die "输入已中断"
+  fi
+
+  printf -v "$target_var" '%s' "$input_value"
 }
 
 read_prompt_with_default() {
@@ -662,19 +643,11 @@ get_cert_conf_file() {
   local domain="$1"
   local preferred_variant="${2:-}"
   local variant
-  local -a conf_candidates=()
+  local -a conf_candidates=( "ecc" "rsa" )
   local conf_file
-  case "$preferred_variant" in
-    ecc)
-      conf_candidates=( "ecc" "rsa" )
-      ;;
-    rsa)
-      conf_candidates=( "rsa" "ecc" )
-      ;;
-    *)
-      conf_candidates=( "ecc" "rsa" )
-      ;;
-  esac
+  if [[ "$preferred_variant" == "rsa" ]]; then
+    conf_candidates=( "rsa" "ecc" )
+  fi
 
   for variant in "${conf_candidates[@]}"; do
     conf_file="$(get_cert_conf_path_by_variant "$domain" "$variant")"
@@ -739,14 +712,6 @@ cleanup_stale_domain_dirs() {
       remove_dir_recursively_if_exists "$variant_dir"
     fi
   done
-}
-
-cleanup_domain_variant_dir() {
-  local domain="$1"
-  local variant="$2"
-  local cert_dir
-  cert_dir="$(get_cert_dir_by_variant "$domain" "$variant")"
-  remove_dir_recursively_if_exists "$cert_dir"
 }
 
 read_conf_value() {
@@ -844,20 +809,19 @@ prompt_yes_no_with_default() {
   local target_var="$1"
   local prompt="$2"
   local default_value="${3:-0}"
-  local answer answer_lower
+  local answer
   while true; do
     read_prompt_value answer "$prompt"
-    answer_lower="${answer,,}"
-    case "$answer_lower" in
+    case "$answer" in
       "")
         printf -v "$target_var" '%s' "$default_value"
         return
         ;;
-      n|no)
+      [Nn]|[Nn][Oo])
         printf -v "$target_var" '%s' "0"
         return
         ;;
-      y|yes)
+      [Yy]|[Yy][Ee][Ss])
         printf -v "$target_var" '%s' "1"
         return
         ;;
@@ -982,10 +946,9 @@ prompt_cloudflare_credentials() {
 
   if [[ "$auth_mode" == "token" ]]; then
     prompt_cf_token_credentials
-    return
+  else
+    prompt_cf_global_key_credentials
   fi
-
-  prompt_cf_global_key_credentials
 }
 
 apply_cloudflare_credentials_env() {
@@ -1117,18 +1080,6 @@ get_cert_install_dir() {
   fi
 
   printf '%s\n' "-"
-}
-
-default_install_dir_for_domain() {
-  local domain="$1"
-  local variant="$2"
-  local current_install_dir
-  current_install_dir="$(get_cert_install_dir "$domain" "$variant")"
-  if [[ "$current_install_dir" == "-" ]]; then
-    printf '%s\n' "/etc/ssl/$domain"
-    return
-  fi
-  printf '%s\n' "$current_install_dir"
 }
 
 prompt_inputs() {
@@ -1275,7 +1226,7 @@ list_certs() {
 }
 
 create_cert() {
-  local cert_variant
+  local cert_variant cert_dir
   OUTPUT_DIR=""
   CF_Key=""
   CF_Email=""
@@ -1295,7 +1246,8 @@ create_cert() {
   prompt_output_dir_with_default OUTPUT_DIR "/etc/ssl/$DOMAIN"
   apply_cloudflare_credentials_env
   if ! issue_cert; then
-    cleanup_domain_variant_dir "$DOMAIN" "$cert_variant"
+    cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
+    remove_dir_recursively_if_exists "$cert_dir"
     err "证书签发失败"
     return 1
   fi
@@ -1307,7 +1259,10 @@ create_cert() {
 update_cert() {
   local target_domain cert_variant cert_dir
   resolve_existing_cert_target target_domain cert_variant "输入需更新安装目录的域名: " || return 1
-  cert_dir="$(default_install_dir_for_domain "$target_domain" "$cert_variant")"
+  cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
+  if [[ "$cert_dir" == "-" ]]; then
+    cert_dir="/etc/ssl/$target_domain"
+  fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
@@ -1339,7 +1294,13 @@ update_script() {
     return 1
   }
 
-  if ! ensure_file_exists_and_writable "$script_path"; then
+  if [[ ! -f "$script_path" ]]; then
+    err "未找到脚本文件: $script_path"
+    return 1
+  fi
+
+  if [[ ! -w "$script_path" ]]; then
+    err "脚本文件不可写: $script_path"
     return 1
   fi
 
@@ -1386,8 +1347,7 @@ update_script() {
 }
 
 uninstall_script() {
-  local confirmed="0"
-  local remove_acme_home="0"
+  local confirmed remove_acme_home
   local script_path
 
   prompt_yes_no_with_default confirmed "确认卸载 acme.sh 并删除本脚本? [y/N]: " "0"
@@ -1396,12 +1356,10 @@ uninstall_script() {
     return 0
   fi
 
-  if [[ -x "$ACME_SH" ]]; then
-    if ! "$ACME_SH" --uninstall; then
-      warn "acme.sh 卸载失败，请手动处理"
-    fi
-  else
+  if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 acme.sh: $ACME_SH"
+  elif ! "$ACME_SH" --uninstall; then
+    warn "acme.sh 卸载失败，请手动处理"
   fi
 
   prompt_yes_no_with_default remove_acme_home "是否删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
@@ -1415,44 +1373,38 @@ uninstall_script() {
     return 1
   }
 
-  if [[ ! -f "$script_path" ]]; then
-    release_lock
+  if [[ -f "$script_path" ]]; then
+    if [[ ! -w "$script_path" ]]; then
+      err "卸载完成，但脚本文件不可写，请手动删除: $script_path"
+      return 1
+    fi
+    if ! rm -f "$script_path"; then
+      err "卸载完成，但删除脚本失败: $script_path"
+      return 1
+    fi
+    log "卸载完成: 已删除脚本 $script_path"
+  else
     log "卸载完成: 脚本文件不存在 $script_path"
-    exit 0
-  fi
-
-  if [[ ! -w "$script_path" ]]; then
-    err "卸载完成，但脚本文件不可写，请手动删除: $script_path"
-    return 1
-  fi
-
-  if ! rm -f "$script_path"; then
-    err "卸载完成，但删除脚本失败: $script_path"
-    return 1
   fi
 
   release_lock
-  log "卸载完成: 已删除脚本 $script_path"
   exit 0
 }
 
 print_main_menu() {
-  local update_label="更新脚本"
-
-  if [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-    update_label="更新脚本 (可用版本: $UPDATE_AVAILABLE_VERSION)"
-  fi
+  local i label
 
   printf '\n'
   printf '%s=== ACME 证书管理器 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
   printf '%s\n' "$REPO_URL"
   printf '\n'
-  printf ' %s1.%s 证书清单\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s2.%s 签发证书\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s3.%s 更新安装目录\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s4.%s 删除证书\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s5.%s %s\n' "$COLOR_INDEX" "$COLOR_RESET" "$update_label"
-  printf ' %s6.%s 卸载并删除脚本\n' "$COLOR_INDEX" "$COLOR_RESET"
+  for ((i = 1; i < ${#MENU_LABELS[@]}; i++)); do
+    label="${MENU_LABELS[$i]}"
+    if ((i == 5)) && [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
+      label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
+    fi
+    printf ' %s%d.%s %s\n' "$COLOR_INDEX" "$i" "$COLOR_RESET" "$label"
+  done
   printf '\n'
 }
 
@@ -1464,11 +1416,18 @@ USAGE
 
 run_menu_action() {
   local choice="$1"
-  local -a handlers=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
+  local max_choice choice_num
+  max_choice=$(( ${#MENU_HANDLERS[@]} - 1 ))
 
-  if [[ "$choice" =~ ^[1-6]$ ]]; then
-    "${handlers[$choice]}" || true
-    return 0
+  if [[ "$choice" =~ ^[0-9]+$ ]]; then
+    choice_num=$((10#$choice))
+  else
+    choice_num=0
+  fi
+
+  if ((choice_num >= 1 && choice_num <= max_choice)); then
+    "${MENU_HANDLERS[$choice_num]}"
+    return
   fi
 
   err "选项无效: $choice"
@@ -1476,12 +1435,13 @@ run_menu_action() {
 }
 
 run_menu() {
-  local choice
+  local choice max_choice
+  max_choice=$(( ${#MENU_HANDLERS[@]} - 1 ))
 
   while true; do
     print_main_menu
 
-    read_prompt_value choice "请选择 [1-6]: "
+    read_prompt_value choice "请选择 [1-${max_choice}]: "
     run_menu_action "$choice" || true
   done
 }
