@@ -1227,6 +1227,20 @@ dns_provider_exists() {
   [[ -f "$dnsapi_dir/${provider}.sh" ]]
 }
 
+list_dns_providers() {
+  local dnsapi_dir="$ACME_HOME/dnsapi"
+  local provider_file providers=""
+
+  [[ -d "$dnsapi_dir" ]] || return 1
+  for provider_file in "$dnsapi_dir"/dns_*.sh; do
+    [[ -f "$provider_file" ]] || continue
+    providers+="${provider_file##*/}"$'\n'
+  done
+  [[ -n "$providers" ]] || return 1
+
+  printf '%s' "$providers" | sed 's/\.sh$//' | sort -u
+}
+
 validate_dns_api_env_vars() {
   local env_vars="$1"
   local env_pair env_key env_value
@@ -1245,10 +1259,16 @@ validate_dns_api_env_vars() {
 }
 
 prompt_dns_provider() {
-  local provider_input current_provider
+  local provider_input current_provider providers
   current_provider="$DNS_PROVIDER"
+
+  if providers="$(list_dns_providers)"; then
+    log "可选 DNS Providers:"
+    printf '%s\n' "$providers"
+  fi
+
   while true; do
-    read_prompt_value provider_input "DNS Providers (默认: $current_provider, 文档: $DNS_API_DOC_URL): "
+    read_prompt_value provider_input "DNS Provider (默认: $current_provider, 文档: $DNS_API_DOC_URL): "
     provider_input="${provider_input:-$current_provider}"
 
     if [[ ! "$provider_input" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
