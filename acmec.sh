@@ -484,16 +484,6 @@ log() {
   printf '%s\n' "$*"
 }
 
-print_section_title() {
-  local title="$1"
-  local title_color="" color_reset=""
-  if [[ -t 1 ]]; then
-    title_color=$'\033[1;94m'
-    color_reset=$'\033[0m'
-  fi
-  printf '%s%s%s\n' "$title_color" "$title" "$color_reset"
-}
-
 err() {
   printf '%s\n' "$*" >&2
 }
@@ -1053,7 +1043,7 @@ print_dns_providers_table() {
   local provider display_provider
   local idx=0
 
-  print_section_title "可选 DNS Provider 列表:"
+  log "可选 DNS Provider 列表:"
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
     display_provider="$(truncate_text "$provider" "$cell_width")"
@@ -1389,7 +1379,6 @@ print_cert_list() {
   fi
 
   border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
-  print_section_title "证书清单"
   printf '%s\n' "$border"
   printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
     "Main_Domain" "KeyLength" "SAN_Domains" "CA" "Created" "Renew" "Install_Dir"
@@ -1589,7 +1578,7 @@ print_main_menu() {
   fi
 
   printf '\n'
-  print_section_title "=== ACME 证书管理 $SCRIPT_VERSION ==="
+  printf '%s=== ACME 证书管理 %s ===%s\n' "$menu_color" "$SCRIPT_VERSION" "$color_reset"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
