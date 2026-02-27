@@ -29,7 +29,7 @@ readonly SCRIPT_UPDATE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
 readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
-readonly MENU_UPDATE_SCRIPT_INDEX="5"
+readonly MENU_UPDATE_SCRIPT_HANDLER="update_script"
 readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
 readonly ENV_HAS_EMAIL="${EMAIL+1}"
@@ -99,12 +99,12 @@ resolve_script_path() {
 resolve_script_path_or_error() {
   local target_var="$1"
   local error_msg="${2:-解析脚本路径失败}"
-  local script_path
-  if ! script_path="$(resolve_script_path)"; then
+  local resolved_path
+  if ! resolved_path="$(resolve_script_path)"; then
     err "$error_msg"
     return 1
   fi
-  printf -v "$target_var" '%s' "$script_path"
+  printf -v "$target_var" '%s' "$resolved_path"
 }
 
 extract_script_version() {
@@ -155,14 +155,14 @@ is_prerelease_newer() {
   local baseline_pre="$2"
   local -a candidate_parts=()
   local -a baseline_parts=()
-  local i=0
+  local part_idx=0
   local candidate_id baseline_id
   IFS='.' read -r -a candidate_parts <<< "$candidate_pre"
   IFS='.' read -r -a baseline_parts <<< "$baseline_pre"
 
   while true; do
-    candidate_id="${candidate_parts[$i]:-}"
-    baseline_id="${baseline_parts[$i]:-}"
+    candidate_id="${candidate_parts[$part_idx]:-}"
+    baseline_id="${baseline_parts[$part_idx]:-}"
 
     if [[ -z "$candidate_id" && -z "$baseline_id" ]]; then
       return 1
@@ -194,7 +194,7 @@ is_prerelease_newer() {
       fi
     fi
 
-    i=$((i + 1))
+    part_idx=$((part_idx + 1))
   done
 }
 
@@ -450,7 +450,7 @@ ensure_cache_schema_compatible() {
 
   if [[ "$cached_schema" != "$CACHE_SCHEMA_VERSION" ]]; then
     reset_persistent_cache_files
-    warn "检测到缓存结构版本变化，已重置本地缓存"
+    warn "缓存结构变更，已重置缓存"
     return 0
   fi
 
@@ -460,7 +460,7 @@ ensure_cache_schema_compatible() {
   fi
 
   reset_persistent_cache_files
-  warn "检测到脚本版本变化，已重置本地缓存"
+  warn "脚本版本变更，已重置缓存"
 }
 
 normalize_cached_settings() {
@@ -694,6 +694,10 @@ warn() {
   err "WARN: $*"
 }
 
+log_no_cert_records() {
+  log "未检测到证书记录"
+}
+
 command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -721,13 +725,13 @@ get_missing_base_dependencies() {
 }
 
 is_valid_domain() {
-  local d="$1"
-  [[ "$d" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
+  local domain_name="$1"
+  [[ "$domain_name" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
 }
 
 is_valid_email() {
-  local e="$1"
-  [[ "$e" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
+  local email_address="$1"
+  [[ "$email_address" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
 }
 
 read_prompt_value() {
@@ -831,7 +835,7 @@ has_ca_bundle() {
 
 warn_service_action_failed() {
   local action="$1"
-  warn "${action}${CRON_SERVICE}失败，需手动处理"
+  warn "${CRON_SERVICE} ${action}失败，需手动处理"
 }
 
 enable_non_systemd_service_autostart() {
@@ -1113,7 +1117,7 @@ prompt_option_with_default() {
   shift 4
   local -a option_map=( "$@" )
   local answer
-  local i=0
+  local option_idx=0
 
   while true; do
     read_prompt_value answer "$prompt"
@@ -1122,13 +1126,13 @@ prompt_option_with_default() {
       return
     fi
 
-    i=0
-    while [[ "$i" -lt "${#option_map[@]}" ]]; do
-      if [[ "$answer" == "${option_map[$i]}" ]]; then
-        printf -v "$target_var" '%s' "${option_map[$((i + 1))]}"
+    option_idx=0
+    while [[ "$option_idx" -lt "${#option_map[@]}" ]]; do
+      if [[ "$answer" == "${option_map[$option_idx]}" ]]; then
+        printf -v "$target_var" '%s' "${option_map[$((option_idx + 1))]}"
         return
       fi
-      i=$((i + 2))
+      option_idx=$((option_idx + 2))
     done
 
     err "$invalid_msg"
@@ -1351,7 +1355,7 @@ prompt_existing_cert_domain() {
   raw_list="$(fetch_cert_list_raw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
-    log "未检测到证书记录"
+    log_no_cert_records
     return 1
   fi
 
@@ -1517,7 +1521,7 @@ print_cert_list() {
     parsed_rows="$(parse_cert_list_rows "$raw_list")"
   fi
   if [[ -z "$parsed_rows" ]]; then
-    log "未检测到证书记录"
+    log_no_cert_records
     return 0
   fi
 
@@ -1587,7 +1591,7 @@ create_cert() {
   run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
-  log "证书签发完成: $DOMAIN -> $OUTPUT_DIR"
+  log "证书已签发: $DOMAIN -> $OUTPUT_DIR"
 }
 
 update_cert() {
@@ -1601,7 +1605,7 @@ update_cert() {
 
   run_or_error "证书路径更新失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
   remember_deploy_base_dir "$target_domain" "$cert_dir"
-  log "证书部署路径更新完成: $target_domain -> $cert_dir"
+  log "证书路径已更新: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
@@ -1619,7 +1623,7 @@ delete_cert() {
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   run_or_error "证书目录清理失败: $acme_dir" remove_dir_recursively_if_exists "$acme_dir" || return 1
 
-  log "证书删除完成: $target_domain"
+  log "证书已删除: $target_domain"
 }
 
 update_script() {
@@ -1661,6 +1665,9 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
+    UPDATE_CACHE_LAST_CHECK_TS="$(current_epoch_seconds)"
+    UPDATE_CACHE_BASELINE_VERSION="$SCRIPT_VERSION"
+    UPDATE_CACHE_NEWER_VERSION=""
     log "已是最新版本"
     return 0
   fi
@@ -1672,7 +1679,7 @@ update_script() {
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "脚本升级完成: $SCRIPT_VERSION -> $new_version，准备重启"
+  log "脚本已升级: $SCRIPT_VERSION -> $new_version，重启中"
   save_cache_or_warn
   release_lock
   exec bash "$script_path"
@@ -1685,7 +1692,6 @@ uninstall_script() {
 
   prompt_yes_no_with_default confirmed "确认卸载 ACME 客户端并删除当前脚本? [y/N]: " "0"
   if [[ "$confirmed" != "1" ]]; then
-    log "操作取消"
     return 0
   fi
 
@@ -1697,27 +1703,27 @@ uninstall_script() {
 
   prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
   run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
-  log "缓存目录清理完成: $CACHE_HOME"
+  log "缓存已清理: $CACHE_HOME"
 
   if [[ "$remove_acme_home" == "1" ]]; then
     run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
-    log "目录已删除: $ACME_HOME"
+    log "ACME_HOME 已删除: $ACME_HOME"
   fi
 
-  resolve_script_path_or_error script_path "卸载完成，未解析到脚本路径，需手动删除" || return 1
+  resolve_script_path_or_error script_path "脚本路径解析失败，请手动删除脚本" || return 1
 
   if [[ -f "$script_path" ]]; then
     if [[ ! -w "$script_path" ]]; then
-      err "卸载完成，脚本不可写，需手动删除: $script_path"
+      err "脚本不可写，请手动删除: $script_path"
       return 1
     fi
     if ! rm -f "$script_path"; then
-      err "卸载完成，删除脚本失败: $script_path"
+      err "脚本删除失败，请手动处理: $script_path"
       return 1
     fi
-    log "卸载完成: 已删除脚本 $script_path"
+    log "脚本已删除: $script_path"
   else
-    log "卸载完成: 未找到脚本文件 $script_path"
+    log "脚本文件不存在: $script_path"
   fi
 
   release_lock
@@ -1725,18 +1731,18 @@ uninstall_script() {
 }
 
 print_main_menu() {
-  local i label
+  local menu_idx label
 
   printf '\n'
   printf '%s=== ACME 证书运维 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
   printf '%s\n' "$REPO_URL"
   printf '\n'
-  for ((i = 1; i <= MENU_MAX_CHOICE; i++)); do
-    label="${MENU_LABELS[$i]}"
-    if ((i == MENU_UPDATE_SCRIPT_INDEX)) && [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
+  for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
+    label="${MENU_LABELS[$menu_idx]}"
+    if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPDATE_SCRIPT_HANDLER" && -n "$UPDATE_AVAILABLE_VERSION" ]]; then
       label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
     fi
-    printf ' %s%d.%s %s\n' "$COLOR_INDEX" "$i" "$COLOR_RESET" "$label"
+    printf ' %s%d.%s %s\n' "$COLOR_INDEX" "$menu_idx" "$COLOR_RESET" "$label"
   done
   printf '\n'
 }
@@ -1748,15 +1754,29 @@ USAGE
 }
 
 validate_menu_config() {
+  local menu_idx handler_name label_name
+  local has_update_handler="0"
+
   if [[ "${#MENU_HANDLERS[@]}" -ne "${#MENU_LABELS[@]}" ]]; then
     die "菜单配置异常: handlers=${#MENU_HANDLERS[@]}, labels=${#MENU_LABELS[@]}"
   fi
   if ((MENU_MAX_CHOICE < 1)); then
     die "菜单配置异常: 无可用功能"
   fi
-  if ((MENU_UPDATE_SCRIPT_INDEX < 1 || MENU_UPDATE_SCRIPT_INDEX > MENU_MAX_CHOICE)); then
-    die "菜单配置异常: 升级菜单索引越界"
-  fi
+
+  for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
+    handler_name="${MENU_HANDLERS[$menu_idx]}"
+    label_name="${MENU_LABELS[$menu_idx]}"
+
+    [[ -n "$handler_name" ]] || die "菜单配置异常: 空处理函数(index=$menu_idx)"
+    [[ -n "$label_name" ]] || die "菜单配置异常: 空菜单文案(index=$menu_idx)"
+    declare -F "$handler_name" >/dev/null || die "菜单配置异常: 处理函数不存在: $handler_name"
+
+    if [[ "$handler_name" == "$MENU_UPDATE_SCRIPT_HANDLER" ]]; then
+      has_update_handler="1"
+    fi
+  done
+  [[ "$has_update_handler" == "1" ]] || die "菜单配置异常: 缺少升级功能入口"
 }
 
 run_menu_action() {
