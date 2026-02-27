@@ -735,6 +735,11 @@ cert_variant_exists() {
   [[ -f "$conf_path" ]]
 }
 
+cert_domain_exists() {
+  local domain="$1"
+  get_cert_conf_file "$domain" >/dev/null 2>&1
+}
+
 cleanup_stale_domain_dirs() {
   local domain="$1"
   local variant=""
@@ -1061,12 +1066,26 @@ prompt_existing_cert_domain() {
 
   while true; do
     selected_domain="$(prompt_domain_value "$prompt")"
-    if get_cert_conf_file "$selected_domain" >/dev/null 2>&1; then
+    if cert_domain_exists "$selected_domain"; then
       printf -v "$target_var" '%s' "$selected_domain"
       return 0
     fi
     err "证书不存在: $selected_domain"
   done
+}
+
+resolve_existing_cert_target() {
+  local domain_var="$1"
+  local variant_var="$2"
+  local prompt="$3"
+  local domain=""
+  local variant=""
+
+  prompt_existing_cert_domain domain "$prompt" || return 1
+  select_cert_variant_for_domain "$domain" variant || return 1
+
+  printf -v "$domain_var" '%s' "$domain"
+  printf -v "$variant_var" '%s' "$variant"
 }
 
 trim_outer_quotes() {
@@ -1125,6 +1144,19 @@ get_cert_install_dir() {
   printf '%s\n' "-"
 }
 
+default_install_dir_for_domain() {
+  local domain="$1"
+  local variant="$2"
+  local current_install_dir=""
+
+  current_install_dir="$(get_cert_install_dir "$domain" "$variant")"
+  if [[ "$current_install_dir" == "-" ]]; then
+    printf '%s\n' "/etc/ssl/$domain"
+    return
+  fi
+  printf '%s\n' "$current_install_dir"
+}
+
 prompt_inputs() {
   local answer=""
   local email_prompt=""
@@ -1175,12 +1207,16 @@ prompt_domain_value() {
 parse_cert_list_rows() {
   local raw_list="$1"
   printf '%s\n' "$raw_list" | awk -F'|' '
+    function trim(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      return v
+    }
     NR == 1 { next }
     NF == 0 { next }
     {
-      main_domain = $1
-      key_length = $2
-      san_domains = $3
+      main_domain = trim($1)
+      key_length = trim($2)
+      san_domains = trim($3)
       ca = ""
       created = ""
       renew = ""
@@ -1199,12 +1235,9 @@ parse_cert_list_rows() {
         next
       }
 
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", main_domain)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key_length)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", san_domains)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", ca)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", created)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", renew)
+      ca = trim(ca)
+      created = trim(created)
+      renew = trim(renew)
 
       gsub(/"/, "", key_length)
       if (key_length == "") key_length = "-"
@@ -1298,7 +1331,7 @@ create_cert() {
   CF_Token=""
   DOMAIN="$(prompt_domain_value "请输入域名 (例如: example.com): ")"
 
-  if get_cert_conf_file "$DOMAIN" >/dev/null 2>&1; then
+  if cert_domain_exists "$DOMAIN"; then
     err "域名已存在证书: $DOMAIN"
     return 1
   fi
@@ -1324,15 +1357,9 @@ update_cert() {
   local target_domain=""
   local cert_variant=""
   local cert_dir=""
-  local current_install_dir=""
 
-  prompt_existing_cert_domain target_domain "请输入要更换安装目录的域名: " || return 1
-  select_cert_variant_for_domain "$target_domain" cert_variant || return 1
-  current_install_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
-  cert_dir="/etc/ssl/$target_domain"
-  if [[ "$current_install_dir" != "-" ]]; then
-    cert_dir="$current_install_dir"
-  fi
+  resolve_existing_cert_target target_domain cert_variant "请输入要更换安装目录的域名: " || return 1
+  cert_dir="$(default_install_dir_for_domain "$target_domain" "$cert_variant")"
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
@@ -1345,9 +1372,7 @@ delete_cert() {
   local acme_dir=""
   local -a remove_args=()
 
-  prompt_existing_cert_domain target_domain "请输入待删除域名: " || return 1
-
-  select_cert_variant_for_domain "$target_domain" cert_variant || return 1
+  resolve_existing_cert_target target_domain cert_variant "请输入待删除域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
@@ -1446,23 +1471,14 @@ USAGE
 
 run_menu_action() {
   local choice="$1"
+  local handler=""
 
   case "$choice" in
-    1)
-      list_certs || true
-      ;;
-    2)
-      create_cert || true
-      ;;
-    3)
-      update_cert || true
-      ;;
-    4)
-      delete_cert || true
-      ;;
-    5)
-      update_script || true
-      ;;
+    1) handler="list_certs" ;;
+    2) handler="create_cert" ;;
+    3) handler="update_cert" ;;
+    4) handler="delete_cert" ;;
+    5) handler="update_script" ;;
     0)
       return 2
       ;;
@@ -1471,6 +1487,8 @@ run_menu_action() {
       return 1
       ;;
   esac
+
+  "$handler" || true
 }
 
 run_menu() {
