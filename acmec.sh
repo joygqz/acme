@@ -28,6 +28,8 @@ readonly SCRIPT_CHECK_MAX_TIME="15"
 readonly SCRIPT_UPDATE_CONNECT_TIMEOUT="10"
 readonly SCRIPT_UPDATE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
+readonly DNS_PROVIDER_TABLE_COLUMNS="4"
+readonly DNS_PROVIDER_TABLE_CELL_WIDTH="20"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
 readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
 readonly MENU_UPDATE_SCRIPT_HANDLER="update_script"
@@ -1241,6 +1243,32 @@ list_dns_providers() {
   printf '%s' "$providers" | sed 's/\.sh$//' | sort -u
 }
 
+print_dns_providers_table() {
+  local providers="$1"
+  local columns="${2:-$DNS_PROVIDER_TABLE_COLUMNS}"
+  local cell_width="${3:-$DNS_PROVIDER_TABLE_CELL_WIDTH}"
+  local provider
+  local idx=0
+  local -a provider_list=()
+
+  while IFS= read -r provider; do
+    [[ -n "$provider" ]] || continue
+    provider_list+=( "$provider" )
+  done <<< "$providers"
+  ((${#provider_list[@]} > 0)) || return 1
+
+  log "可选 DNS Providers:"
+  for ((idx = 0; idx < ${#provider_list[@]}; idx++)); do
+    printf '%-*s' "$cell_width" "${provider_list[$idx]}"
+    if ((((idx + 1) % columns) == 0)); then
+      printf '\n'
+    fi
+  done
+  if ((${#provider_list[@]} % columns != 0)); then
+    printf '\n'
+  fi
+}
+
 validate_dns_api_env_vars() {
   local env_vars="$1"
   local env_pair env_key env_value
@@ -1259,13 +1287,11 @@ validate_dns_api_env_vars() {
 }
 
 prompt_dns_provider() {
-  local provider_input current_provider providers providers_inline
+  local provider_input current_provider providers
   current_provider="$DNS_PROVIDER"
 
   if providers="$(list_dns_providers)"; then
-    providers_inline="${providers//$'\n'/, }"
-    providers_inline="${providers_inline%, }"
-    log "可选 DNS Providers: $providers_inline"
+    print_dns_providers_table "$providers"
   fi
 
   while true; do
