@@ -1259,12 +1259,13 @@ validate_dns_api_env_vars() {
 }
 
 prompt_dns_provider() {
-  local provider_input current_provider providers
+  local provider_input current_provider providers providers_inline
   current_provider="$DNS_PROVIDER"
 
   if providers="$(list_dns_providers)"; then
-    log "可选 DNS Providers:"
-    printf '%s\n' "$providers"
+    providers_inline="${providers//$'\n'/, }"
+    providers_inline="${providers_inline%, }"
+    log "可选 DNS Providers: $providers_inline"
   fi
 
   while true; do
