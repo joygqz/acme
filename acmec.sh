@@ -12,7 +12,7 @@ readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly DNS_API_DOC_URL="https://go-acme.github.io/lego/dns/"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.4"
+readonly SCRIPT_VERSION="v1.0.5"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -58,13 +58,7 @@ CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS:-1}"
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
-COLOR_RESET=""
-COLOR_TITLE=""
-COLOR_INDEX=""
-COLOR_ERROR_TEXT=""
 LOCK_FD=""
-DIR_LOCK_DIR=""
-DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
 DNS_API_ENV_LAST_KEYS=""
 
@@ -252,36 +246,10 @@ check_script_update() {
   fi
 }
 
-get_process_start_token() {
-  local pid="$1"
-  local token lstart
-  if [[ -r "/proc/$pid/stat" ]]; then
-    token="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
-    if [[ -n "$token" ]]; then
-      printf '%s\n' "$token"
-      return
-    fi
-  fi
-
-  lstart="$(ps -o lstart= -p "$pid" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]][[:space:]]*/ /g')"
-  if [[ -n "$lstart" ]]; then
-    printf '%s\n' "$lstart" | cksum | awk '{print $1}'
-    return
-  fi
-
-  printf '\n'
-}
-
 remove_file_quietly() {
   local file_path="$1"
   [[ -n "$file_path" ]] || return
   rm -f "$file_path" >/dev/null 2>&1 || true
-}
-
-remove_empty_dir_quietly() {
-  local dir_path="$1"
-  [[ -n "$dir_path" ]] || return
-  rmdir "$dir_path" >/dev/null 2>&1 || true
 }
 
 is_unsafe_delete_target() {
@@ -550,59 +518,22 @@ remember_deploy_base_dir() {
   DEPLOY_BASE_DIR="$base_dir"
 }
 
-write_dir_lock_state() {
-  local lock_dir="$1"
-  local pid_file="$2"
-  local self_start_token
-  self_start_token="$(get_process_start_token "$$")"
-  printf '%s %s\n' "$$" "$self_start_token" > "$pid_file"
-  DIR_LOCK_DIR="$lock_dir"
-  DIR_LOCK_PID_FILE="$pid_file"
-  trap 'remove_file_quietly "$DIR_LOCK_PID_FILE"; remove_empty_dir_quietly "$DIR_LOCK_DIR"' EXIT
-}
-
 lock_conflict() {
   die "已有实例运行中"
 }
 
 acquire_lock() {
-  local lock_dir pid_file
-  local lock_pid lock_start_token current_start_token
   mkdir -p "$(dirname "$LOCK_FILE")"
 
-  if command_exists flock; then
-    exec {LOCK_FD}> "$LOCK_FILE"
-    if ! flock -n "$LOCK_FD"; then
-      lock_conflict
-    fi
+  if ! command_exists flock; then
+    warn "未检测到 flock, 跳过并发锁"
     return
   fi
 
-  lock_dir="${LOCK_FILE}.d"
-  pid_file="$lock_dir/pid"
-
-  if mkdir "$lock_dir" 2>/dev/null; then
-    write_dir_lock_state "$lock_dir" "$pid_file"
-    return
+  exec {LOCK_FD}> "$LOCK_FILE"
+  if ! flock -n "$LOCK_FD"; then
+    lock_conflict
   fi
-
-  if [[ -f "$pid_file" ]]; then
-    read -r lock_pid lock_start_token < "$pid_file" || true
-    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
-      current_start_token="$(get_process_start_token "$lock_pid")"
-      if [[ -z "$lock_start_token" || -z "$current_start_token" || "$lock_start_token" == "$current_start_token" ]]; then
-        lock_conflict
-      fi
-    fi
-  fi
-
-  remove_file_quietly "$pid_file"
-  if rmdir "$lock_dir" >/dev/null 2>&1 && mkdir "$lock_dir" 2>/dev/null; then
-    write_dir_lock_state "$lock_dir" "$pid_file"
-    return
-  fi
-
-  lock_conflict
 }
 
 release_lock() {
@@ -612,27 +543,7 @@ release_lock() {
     LOCK_FD=""
   fi
 
-  if [[ -n "$DIR_LOCK_PID_FILE" ]]; then
-    remove_file_quietly "$DIR_LOCK_PID_FILE"
-    DIR_LOCK_PID_FILE=""
-  fi
-
-  if [[ -n "$DIR_LOCK_DIR" ]]; then
-    remove_empty_dir_quietly "$DIR_LOCK_DIR"
-    DIR_LOCK_DIR=""
-  fi
-
   trap - EXIT
-}
-
-init_colors() {
-  if [[ "${NO_COLOR:-}" == "1" || "${NO_COLOR:-}" == "true" ]]; then
-    return
-  fi
-  COLOR_RESET=$'\033[0m'
-  COLOR_TITLE=$'\033[1;94m'
-  COLOR_INDEX=$'\033[1;94m'
-  COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
 log() {
@@ -640,10 +551,6 @@ log() {
 }
 
 err() {
-  if [[ -n "$COLOR_ERROR_TEXT" ]]; then
-    printf '%s\n' "${COLOR_ERROR_TEXT}$*${COLOR_RESET}" >&2
-    return
-  fi
   printf '%s\n' "$*" >&2
 }
 
@@ -1572,7 +1479,7 @@ print_cert_list() {
 
   border="+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
   printf '\n'
-  printf "%s证书清单%s\n" "$COLOR_TITLE" "$COLOR_RESET"
+  printf "%s\n" "证书清单"
   printf '\n'
   printf '%s\n' "$border"
   printf "| %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
@@ -1591,8 +1498,8 @@ print_cert_list() {
     renew_fmt="$(truncate_text "$renew" 20)"
     install_dir_fmt="$(truncate_text "$install_dir" 26)"
 
-    printf "| %s%-25s%s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
-      "$COLOR_INDEX" "$main_domain_fmt" "$COLOR_RESET" \
+    printf "| %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
+      "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
       "$ca_fmt" \
@@ -1776,7 +1683,7 @@ print_main_menu() {
   local menu_idx label
 
   printf '\n'
-  printf '%s=== ACME 证书运维 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
+  printf '=== ACME 证书运维 %s ===\n' "$SCRIPT_VERSION"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
@@ -1784,7 +1691,7 @@ print_main_menu() {
     if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPDATE_SCRIPT_HANDLER" && -n "$UPDATE_AVAILABLE_VERSION" ]]; then
       label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
     fi
-    printf ' %s%d.%s %s\n' "$COLOR_INDEX" "$menu_idx" "$COLOR_RESET" "$label"
+    printf ' %d. %s\n' "$menu_idx" "$label"
   done
   printf '\n'
 }
@@ -1863,7 +1770,6 @@ main() {
 
   require_root
   acquire_lock
-  init_colors
   validate_menu_config
   load_cache_or_warn
   detect_os
