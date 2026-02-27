@@ -525,9 +525,9 @@ save_cached_secrets() {
   fi
 
   write_cache_entries "$CACHE_SECRETS_FILE" \
-    "CF_Token" "$CF_Token" \
-    "CF_Key" "$CF_Key" \
-    "CF_Email" "$CF_Email"
+    "CF_Token" "${CF_Token:-}" \
+    "CF_Key" "${CF_Key:-}" \
+    "CF_Email" "${CF_Email:-}"
 }
 
 save_persistent_cache() {
@@ -1119,6 +1119,10 @@ prompt_option_with_default() {
   local answer
   local option_idx=0
 
+  if (( ${#option_map[@]} == 0 || (${#option_map[@]} % 2) != 0 )); then
+    die "选项配置异常: $prompt"
+  fi
+
   while true; do
     read_prompt_value answer "$prompt"
     if [[ -z "$answer" ]]; then
@@ -1306,14 +1310,18 @@ prompt_cloudflare_credentials() {
 }
 
 apply_cloudflare_credentials_env() {
+  CF_Token="${CF_Token:-}"
+  CF_Key="${CF_Key:-}"
+  CF_Email="${CF_Email:-}"
+
   if [[ -n "$CF_Token" ]]; then
-    export CF_Token
-    unset CF_Key CF_Email
-    return
+    CF_Key=""
+    CF_Email=""
+  else
+    CF_Token=""
   fi
 
-  export CF_Key CF_Email
-  unset CF_Token
+  export CF_Token CF_Key CF_Email
 }
 
 install_cert_to_dir() {
