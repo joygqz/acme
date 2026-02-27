@@ -1648,7 +1648,7 @@ run_menu() {
 main() {
   if [[ "$#" -gt 0 ]]; then
     if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
-      log "DNS API ACME 运维脚本"
+      log "DNS API ACME 管理脚本"
       return 0
     fi
     die "不支持的参数: $*"

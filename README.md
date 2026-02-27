@@ -1,6 +1,6 @@
 # ACME CertOps
 
-ACME DNS API 运维脚本
+ACME DNS API 管理脚本
 
 ## DNS Providers
 
