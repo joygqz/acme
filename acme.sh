@@ -7,8 +7,7 @@ readonly DEFAULT_KEY_TYPE="ec-256"
 readonly DEFAULT_CA_SERVER="letsencrypt"
 readonly DNS_PROVIDER="dns_cf"
 readonly DEFAULT_ACME_HOME="/root/.acme.sh"
-ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
-readonly ACME_HOME
+readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
@@ -58,9 +57,7 @@ curl_script_raw_retry() {
 
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
-  local source_dir=""
-  local source_name=""
-
+  local source_dir source_name
   if [[ -z "$source_path" ]]; then
     return 1
   fi
@@ -78,7 +75,7 @@ ensure_file_exists_and_writable() {
   local file_path="$1"
 
   if [[ ! -f "$file_path" ]]; then
-    err "脚本文件不存在: $file_path"
+    err "未找到脚本文件: $file_path"
     return 1
   fi
 
@@ -137,9 +134,7 @@ is_prerelease_newer() {
   local -a candidate_parts=()
   local -a baseline_parts=()
   local i=0
-  local candidate_id=""
-  local baseline_id=""
-
+  local candidate_id baseline_id
   IFS='.' read -r -a candidate_parts <<< "$candidate_pre"
   IFS='.' read -r -a baseline_parts <<< "$baseline_pre"
 
@@ -182,8 +177,7 @@ is_prerelease_newer() {
 }
 
 fetch_remote_script_version() {
-  local remote_version=""
-
+  local remote_version
   if ! remote_version="$(curl_script_raw_retry --connect-timeout "$SCRIPT_CHECK_CONNECT_TIMEOUT" --max-time "$SCRIPT_CHECK_MAX_TIME" 2>/dev/null | extract_script_version)"; then
     return 1
   fi
@@ -195,15 +189,8 @@ fetch_remote_script_version() {
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
-  local candidate_major=""
-  local candidate_minor=""
-  local candidate_patch=""
-  local candidate_pre=""
-  local baseline_major=""
-  local baseline_minor=""
-  local baseline_patch=""
-  local baseline_pre=""
-
+  local candidate_major candidate_minor candidate_patch candidate_pre
+  local baseline_major baseline_minor baseline_patch baseline_pre
   [[ "$candidate" != "$baseline" ]] || return 1
   IFS=$'\t' read -r candidate_major candidate_minor candidate_patch candidate_pre <<< "$(parse_semver "$candidate")" || return 1
   IFS=$'\t' read -r baseline_major baseline_minor baseline_patch baseline_pre <<< "$(parse_semver "$baseline")" || return 1
@@ -235,8 +222,7 @@ is_version_newer() {
 }
 
 check_script_update() {
-  local remote_version=""
-
+  local remote_version
   UPDATE_AVAILABLE_VERSION=""
   if remote_version="$(fetch_remote_script_version)" && is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     UPDATE_AVAILABLE_VERSION="$remote_version"
@@ -245,9 +231,7 @@ check_script_update() {
 
 get_process_start_token() {
   local pid="$1"
-  local token=""
-  local lstart=""
-
+  local token lstart
   if [[ -r "/proc/$pid/stat" ]]; then
     token="$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null || true)"
     if [[ -n "$token" ]]; then
@@ -300,17 +284,12 @@ arm_dir_lock_cleanup() {
 }
 
 lock_conflict() {
-  die "检测到脚本正在运行, 请稍后重试"
+  die "已存在运行中的实例，请稍后重试"
 }
 
 acquire_lock() {
-  local lock_dir=""
-  local pid_file=""
-  local lock_pid=""
-  local lock_start_token=""
-  local current_start_token=""
-  local self_start_token=""
-
+  local lock_dir pid_file
+  local lock_pid lock_start_token current_start_token self_start_token
   mkdir -p "$(dirname "$LOCK_FILE")"
 
   if command_exists flock; then
@@ -406,7 +385,7 @@ die() {
 }
 
 warn() {
-  err "警告: $*"
+  err "WARN: $*"
 }
 
 command_exists() {
@@ -415,8 +394,7 @@ command_exists() {
 
 get_missing_base_dependencies() {
   local -a missing=()
-  local cmd=""
-
+  local cmd
   for cmd in curl openssl crontab; do
     if ! command_exists "$cmd"; then
       missing+=( "$cmd" )
@@ -436,6 +414,32 @@ is_valid_email() {
   [[ "$e" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
 }
 
+read_prompt_value() {
+  local target_var="$1"
+  local prompt="$2"
+  local hidden="${3:-0}"
+  local value
+
+  if [[ "$hidden" == "1" ]]; then
+    read -r -s -p "$prompt" value
+    printf '\n'
+  else
+    read -r -p "$prompt" value
+  fi
+
+  printf -v "$target_var" '%s' "$value"
+}
+
+read_prompt_with_default() {
+  local target_var="$1"
+  local prompt="$2"
+  local default_value="$3"
+  local value
+
+  read_prompt_value value "$prompt"
+  printf -v "$target_var" '%s' "${value:-$default_value}"
+}
+
 ensure_non_empty_input() {
   local target_var="$1"
   local prompt="$2"
@@ -445,12 +449,7 @@ ensure_non_empty_input() {
 
   while true; do
     if [[ -z "$value" ]]; then
-      if [[ "$hidden" == "1" ]]; then
-        read -r -s -p "$prompt" value
-        printf '\n'
-      else
-        read -r -p "$prompt" value
-      fi
+      read_prompt_value value "$prompt" "$hidden"
     fi
 
     if [[ -n "$value" ]]; then
@@ -471,7 +470,7 @@ ensure_valid_email_input() {
 
   while true; do
     if [[ -z "$value" ]]; then
-      read -r -p "$prompt" value
+      read_prompt_value value "$prompt"
     fi
 
     if is_valid_email "$value"; then
@@ -485,15 +484,13 @@ ensure_valid_email_input() {
 }
 
 require_root() {
-  [[ "${EUID}" -eq 0 ]] || die "请使用 root 用户运行脚本"
+  [[ "${EUID}" -eq 0 ]] || die "请以 root 用户运行"
 }
 
 detect_os() {
-  local os_id=""
-  local os_like=""
-
+  local os_id os_like
   if [[ ! -f /etc/os-release ]]; then
-    die "无法识别系统, 缺少 /etc/os-release"
+    die "系统识别失败: 缺少 /etc/os-release"
   fi
 
   # shellcheck disable=SC1091
@@ -513,7 +510,7 @@ detect_os() {
     fi
     CRON_SERVICE="crond"
   else
-    die "暂不支持该系统: ID=${os_id}, ID_LIKE=${os_like}"
+    die "不支持当前系统: ID=${os_id}, ID_LIKE=${os_like}"
   fi
 }
 
@@ -523,7 +520,7 @@ has_ca_bundle() {
 
 warn_service_action_failed() {
   local action="$1"
-  warn "无法${action}服务 ${CRON_SERVICE}, 请手动检查"
+  warn "${action}${CRON_SERVICE}失败，请手动处理"
 }
 
 enable_non_systemd_service_autostart() {
@@ -558,7 +555,7 @@ ensure_cron_service_running() {
   fi
 
   if ! command_exists service; then
-    warn "未检测到 systemctl/service, 无法自动管理 ${CRON_SERVICE} 服务"
+    warn "未检测到 systemctl/service，无法自动管理 ${CRON_SERVICE}"
     return
   fi
 
@@ -569,8 +566,7 @@ ensure_cron_service_running() {
 }
 
 install_deps() {
-  local missing_deps=""
-
+  local missing_deps
   missing_deps="$(get_missing_base_dependencies)"
   if [[ -z "$missing_deps" ]] && has_ca_bundle; then
     ensure_cron_service_running
@@ -579,26 +575,26 @@ install_deps() {
 
   case "$PKG_TYPE" in
     apt)
-      command_exists apt-get || die "缺少 apt-get 命令"
+      command_exists apt-get || die "缺少命令: apt-get"
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
       apt-get install -y --no-install-recommends curl cron openssl ca-certificates
       ;;
     yum|dnf)
-      command_exists "$PKG_TYPE" || die "缺少 ${PKG_TYPE} 命令"
+      command_exists "$PKG_TYPE" || die "缺少命令: ${PKG_TYPE}"
       "$PKG_TYPE" install -y curl cronie openssl ca-certificates
       ;;
     *)
-      die "未知包管理器: $PKG_TYPE"
+      die "不支持的包管理器: $PKG_TYPE"
       ;;
   esac
 
   missing_deps="$(get_missing_base_dependencies)"
   if [[ -n "$missing_deps" ]]; then
-    die "依赖安装后仍缺少命令: $missing_deps"
+    die "依赖安装后缺少命令: $missing_deps"
   fi
   if ! has_ca_bundle; then
-    die "依赖安装后仍缺少 CA 证书文件"
+    die "依赖安装后缺少 CA 证书文件"
   fi
 
   ensure_cron_service_running
@@ -611,7 +607,7 @@ install_acme_sh() {
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    die "acme.sh 安装失败, 未找到文件: $ACME_SH"
+    die "acme.sh 安装失败: 未找到 $ACME_SH"
   fi
 
   if [[ "${ACME_AUTO_UPGRADE:-0}" == "1" ]]; then
@@ -622,9 +618,7 @@ install_acme_sh() {
 
 ensure_default_ca() {
   local account_conf="$ACME_HOME/account.conf"
-  local current_ca=""
-  local expected_ca=""
-
+  local current_ca expected_ca
   if [[ -f "$account_conf" ]]; then
     current_ca="$(read_conf_value "$account_conf" "DEFAULT_ACME_SERVER")"
     current_ca="$(trim_outer_quotes "$current_ca")"
@@ -661,16 +655,15 @@ prompt_install_email_if_needed() {
     EMAIL="$CF_Email"
   fi
 
-  ensure_valid_email_input EMAIL "首次安装, 请输入 ACME 邮箱: " "邮箱格式错误"
+  ensure_valid_email_input EMAIL "首次安装，请输入 ACME 邮箱: " "邮箱格式无效"
 }
 
 get_cert_conf_file() {
   local domain="$1"
   local preferred_variant="${2:-}"
-  local variant=""
+  local variant
   local -a conf_candidates=()
-  local conf_file=""
-
+  local conf_file
   case "$preferred_variant" in
     ecc)
       conf_candidates=( "ecc" "rsa" )
@@ -711,8 +704,7 @@ variant_dir_suffix() {
 get_cert_conf_path_by_variant() {
   local domain="$1"
   local variant="$2"
-  local suffix=""
-
+  local suffix
   suffix="$(variant_dir_suffix "$variant")"
   printf '%s\n' "$ACME_HOME/${domain}${suffix}/${domain}.conf"
 }
@@ -720,8 +712,7 @@ get_cert_conf_path_by_variant() {
 get_cert_dir_by_variant() {
   local domain="$1"
   local variant="$2"
-  local suffix=""
-
+  local suffix
   suffix="$(variant_dir_suffix "$variant")"
   printf '%s\n' "$ACME_HOME/${domain}${suffix}"
 }
@@ -729,8 +720,7 @@ get_cert_dir_by_variant() {
 cert_variant_exists() {
   local domain="$1"
   local variant="$2"
-  local conf_path=""
-
+  local conf_path
   conf_path="$(get_cert_conf_path_by_variant "$domain" "$variant")"
   [[ -f "$conf_path" ]]
 }
@@ -742,9 +732,7 @@ cert_domain_exists() {
 
 cleanup_stale_domain_dirs() {
   local domain="$1"
-  local variant=""
-  local variant_dir=""
-
+  local variant variant_dir
   for variant in ecc rsa; do
     variant_dir="$(get_cert_dir_by_variant "$domain" "$variant")"
     if [[ -d "$variant_dir" ]] && ! cert_variant_exists "$domain" "$variant"; then
@@ -756,8 +744,7 @@ cleanup_stale_domain_dirs() {
 cleanup_domain_variant_dir() {
   local domain="$1"
   local variant="$2"
-  local cert_dir=""
-
+  local cert_dir
   cert_dir="$(get_cert_dir_by_variant "$domain" "$variant")"
   remove_dir_recursively_if_exists "$cert_dir"
 }
@@ -773,8 +760,7 @@ select_cert_variant_for_domain() {
   local target_var="$2"
   local has_ecc="0"
   local has_rsa="0"
-  local answer=""
-
+  local answer
   if cert_variant_exists "$domain" "ecc"; then
     has_ecc="1"
   fi
@@ -784,7 +770,7 @@ select_cert_variant_for_domain() {
 
   if [[ "$has_ecc" == "1" && "$has_rsa" == "1" ]]; then
     while true; do
-      read -r -p "检测到 ECC/RSA, 请选择 [1] ECC [2] RSA: " answer
+      read_prompt_value answer "检测到 ECC/RSA，请选择 [1] ECC [2] RSA: "
       case "$answer" in
         1)
           printf -v "$target_var" '%s' "ecc"
@@ -795,7 +781,7 @@ select_cert_variant_for_domain() {
           return 0
           ;;
         *)
-          err "选项无效, 请重新输入"
+          err "选项无效，请重试"
           ;;
       esac
     done
@@ -831,11 +817,11 @@ prompt_option_with_default() {
   local invalid_msg="$4"
   shift 4
   local -a option_map=( "$@" )
-  local answer=""
+  local answer
   local i=0
 
   while true; do
-    read -r -p "$prompt" answer
+    read_prompt_value answer "$prompt"
     if [[ -z "$answer" ]]; then
       printf -v "$target_var" '%s' "$default_value"
       return
@@ -858,11 +844,9 @@ prompt_yes_no_with_default() {
   local target_var="$1"
   local prompt="$2"
   local default_value="${3:-0}"
-  local answer=""
-  local answer_lower=""
-
+  local answer answer_lower
   while true; do
-    read -r -p "$prompt" answer
+    read_prompt_value answer "$prompt"
     answer_lower="${answer,,}"
     case "$answer_lower" in
       "")
@@ -878,7 +862,7 @@ prompt_yes_no_with_default() {
         return
         ;;
       *)
-        err "请输入 y 或 n"
+        err "请输入 y/n"
         ;;
     esac
   done
@@ -907,16 +891,16 @@ normalize_issue_options() {
 }
 
 prompt_issue_options() {
-  local wildcard_prompt="是否包含泛域名 *.$DOMAIN [y/N]: "
+  local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
   local force_renew_prompt="是否强制重新签发 [y/N]: "
 
   normalize_issue_options
 
   prompt_option_with_default \
     ISSUE_KEY_TYPE \
-    "密钥类型 [1] ec-256, [2] ec-384, [3] rsa-2048, [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
+    "密钥算法 [1] ec-256 [2] ec-384 [3] rsa-2048 [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
     "$ISSUE_KEY_TYPE" \
-    "密钥类型选项无效, 请重新输入" \
+    "密钥算法选项无效，请重试" \
     "1" "ec-256" \
     "2" "ec-384" \
     "3" "2048" \
@@ -924,15 +908,15 @@ prompt_issue_options() {
 
   prompt_option_with_default \
     ISSUE_CA_SERVER \
-    "CA [1] letsencrypt, [2] zerossl, [3] buypass (默认: $ISSUE_CA_SERVER): " \
+    "CA 提供方 [1] letsencrypt [2] zerossl [3] buypass (默认: $ISSUE_CA_SERVER): " \
     "$ISSUE_CA_SERVER" \
-    "CA 选项无效, 请重新输入" \
+    "CA 选项无效，请重试" \
     "1" "letsencrypt" \
     "2" "zerossl" \
     "3" "buypass"
 
   if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
-    wildcard_prompt="是否包含泛域名 *.$DOMAIN [Y/n]: "
+    wildcard_prompt="是否签发泛域名 *.$DOMAIN [Y/n]: "
   fi
   if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
     force_renew_prompt="是否强制重新签发 [Y/n]: "
@@ -963,22 +947,21 @@ issue_cert() {
 }
 
 prompt_cf_token_credentials() {
-  ensure_non_empty_input CF_Token "请输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
+  ensure_non_empty_input CF_Token "输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
 
   CF_Key=""
   CF_Email=""
 }
 
 prompt_cf_global_key_credentials() {
-  ensure_valid_email_input CF_Email "请输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式错误"
-  ensure_non_empty_input CF_Key "请输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
+  ensure_valid_email_input CF_Email "输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式无效"
+  ensure_non_empty_input CF_Key "输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
 
   CF_Token=""
 }
 
 prompt_cloudflare_credentials() {
-  local auth_mode=""
-
+  local auth_mode
   if [[ -n "$CF_Token" ]]; then
     prompt_cf_token_credentials
     return
@@ -991,9 +974,9 @@ prompt_cloudflare_credentials() {
 
   prompt_option_with_default \
     auth_mode \
-    "Cloudflare 鉴权 [1] API Token (推荐), [2] Global API Key: " \
+    "Cloudflare 认证方式 [1] API Token (推荐) [2] Global API Key: " \
     "token" \
-    "鉴权选项无效, 请重新输入" \
+    "认证方式无效，请重试" \
     "1" "token" \
     "2" "key"
 
@@ -1051,14 +1034,11 @@ fetch_cert_list_raw() {
 prompt_existing_cert_domain() {
   local target_var="$1"
   local prompt="$2"
-  local raw_list=""
-  local parsed_rows=""
-  local selected_domain=""
-
+  local raw_list parsed_rows selected_domain
   raw_list="$(fetch_cert_list_raw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
-    log "暂无证书"
+    log "无证书记录"
     return 1
   fi
 
@@ -1070,7 +1050,7 @@ prompt_existing_cert_domain() {
       printf -v "$target_var" '%s' "$selected_domain"
       return 0
     fi
-    err "证书不存在: $selected_domain"
+    err "未找到证书: $selected_domain"
   done
 }
 
@@ -1078,9 +1058,7 @@ resolve_existing_cert_target() {
   local domain_var="$1"
   local variant_var="$2"
   local prompt="$3"
-  local domain=""
-  local variant=""
-
+  local domain variant
   prompt_existing_cert_domain domain "$prompt" || return 1
   select_cert_variant_for_domain "$domain" variant || return 1
 
@@ -1118,10 +1096,7 @@ truncate_text() {
 get_cert_install_dir() {
   local domain="$1"
   local preferred_variant="${2:-}"
-  local conf_file=""
-  local cert_path=""
-  local key_path=""
-
+  local conf_file cert_path key_path
   if ! conf_file="$(get_cert_conf_file "$domain" "$preferred_variant")"; then
     printf '%s\n' "-"
     return
@@ -1147,8 +1122,7 @@ get_cert_install_dir() {
 default_install_dir_for_domain() {
   local domain="$1"
   local variant="$2"
-  local current_install_dir=""
-
+  local current_install_dir
   current_install_dir="$(get_cert_install_dir "$domain" "$variant")"
   if [[ "$current_install_dir" == "-" ]]; then
     printf '%s\n' "/etc/ssl/$domain"
@@ -1158,45 +1132,38 @@ default_install_dir_for_domain() {
 }
 
 prompt_inputs() {
-  local answer=""
-  local email_prompt=""
-
+  local email_prompt
   prompt_cloudflare_credentials
 
   if [[ -z "$EMAIL" && -n "$CF_Email" ]]; then
     EMAIL="$CF_Email"
-    email_prompt="请输入 ACME 账号邮箱 (留空使用 CF_Email): "
+    email_prompt="ACME 账号邮箱 (留空使用 CF_Email): "
   elif [[ -n "$EMAIL" ]]; then
-    email_prompt="请输入 ACME 账号邮箱 (留空使用: $EMAIL): "
+    email_prompt="ACME 账号邮箱 (留空使用: $EMAIL): "
   else
-    email_prompt="请输入 ACME 账号邮箱 (例如: admin@example.com): "
+    email_prompt="ACME 账号邮箱 (示例: admin@example.com): "
   fi
-  read -r -p "$email_prompt" answer
-  EMAIL="${answer:-$EMAIL}"
-  ensure_valid_email_input EMAIL "请输入 ACME 账号邮箱 (例如: admin@example.com): " "邮箱格式错误"
+  read_prompt_with_default EMAIL "$email_prompt" "$EMAIL"
+  ensure_valid_email_input EMAIL "ACME 账号邮箱 (示例: admin@example.com): " "邮箱格式无效"
 }
 
 prompt_output_dir_with_default() {
   local target_var="$1"
   local default_dir="$2"
-  local answer=""
-
-  read -r -p "输出目录 (默认: $default_dir): " answer
-  printf -v "$target_var" '%s' "${answer:-$default_dir}"
+  read_prompt_with_default "$target_var" "安装目录 (默认: $default_dir): " "$default_dir"
 }
 
 prompt_domain_value() {
   local prompt="$1"
-  local value=""
-
+  local value
   while true; do
-    read -r -p "$prompt" value
+    read_prompt_value value "$prompt"
     if [[ -z "$value" ]]; then
       err "域名不能为空"
       continue
     fi
     if ! is_valid_domain "$value"; then
-      err "域名格式错误: $value"
+      err "域名格式无效: $value"
       continue
     fi
     printf '%s\n' "$value"
@@ -1256,34 +1223,20 @@ parse_cert_list_rows() {
 print_cert_list() {
   local raw_list="$1"
   local parsed_rows="${2:-}"
-  local border=""
-  local row_variant=""
-  local main_domain=""
-  local key_length=""
-  local san_domains=""
-  local ca=""
-  local created=""
-  local renew=""
-  local install_dir=""
-  local main_domain_fmt=""
-  local key_length_fmt=""
-  local san_domains_fmt=""
-  local ca_fmt=""
-  local created_fmt=""
-  local renew_fmt=""
-  local install_dir_fmt=""
-
+  local border row_variant
+  local main_domain key_length san_domains ca created renew install_dir
+  local main_domain_fmt key_length_fmt san_domains_fmt ca_fmt created_fmt renew_fmt install_dir_fmt
   if [[ -z "$parsed_rows" ]]; then
     parsed_rows="$(parse_cert_list_rows "$raw_list")"
   fi
   if [[ -z "$parsed_rows" ]]; then
-    log "暂无证书"
+    log "无证书记录"
     return 0
   fi
 
   border="+---------------------------+---------+---------------------------+-------------+----------------------+----------------------+----------------------------+"
   printf '\n'
-  printf "%s证书列表%s\n" "$COLOR_TITLE" "$COLOR_RESET"
+  printf "%s证书清单%s\n" "$COLOR_TITLE" "$COLOR_RESET"
   printf '\n'
   printf '%s\n' "$border"
   printf "| %-25s | %-7s | %-25s | %-11s | %-20s | %-20s | %-26s |\n" \
@@ -1316,23 +1269,21 @@ print_cert_list() {
 }
 
 list_certs() {
-  local raw_list=""
-
+  local raw_list
   raw_list="$(fetch_cert_list_raw)" || return 1
   print_cert_list "$raw_list"
 }
 
 create_cert() {
-  local cert_variant=""
-
+  local cert_variant
   OUTPUT_DIR=""
   CF_Key=""
   CF_Email=""
   CF_Token=""
-  DOMAIN="$(prompt_domain_value "请输入域名 (例如: example.com): ")"
+  DOMAIN="$(prompt_domain_value "输入域名 (示例: example.com): ")"
 
   if cert_domain_exists "$DOMAIN"; then
-    err "域名已存在证书: $DOMAIN"
+    err "证书已存在: $DOMAIN"
     return 1
   fi
 
@@ -1345,34 +1296,29 @@ create_cert() {
   apply_cloudflare_credentials_env
   if ! issue_cert; then
     cleanup_domain_variant_dir "$DOMAIN" "$cert_variant"
-    err "证书申请失败"
+    err "证书签发失败"
     return 1
   fi
   install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"
 
-  log "创建成功: $DOMAIN -> $OUTPUT_DIR"
+  log "创建完成: $DOMAIN -> $OUTPUT_DIR"
 }
 
 update_cert() {
-  local target_domain=""
-  local cert_variant=""
-  local cert_dir=""
-
-  resolve_existing_cert_target target_domain cert_variant "请输入要更换安装目录的域名: " || return 1
+  local target_domain cert_variant cert_dir
+  resolve_existing_cert_target target_domain cert_variant "输入需更新安装目录的域名: " || return 1
   cert_dir="$(default_install_dir_for_domain "$target_domain" "$cert_variant")"
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
-  log "更换成功: $target_domain -> $cert_dir"
+  log "更新完成: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
-  local target_domain=""
-  local cert_variant=""
-  local acme_dir=""
+  local target_domain cert_variant acme_dir
   local -a remove_args=()
 
-  resolve_existing_cert_target target_domain cert_variant "请输入待删除域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "输入待删除证书域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
@@ -1383,17 +1329,13 @@ delete_cert() {
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   remove_dir_recursively_if_exists "$acme_dir"
 
-  log "删除成功: $target_domain"
+  log "删除完成: $target_domain"
 }
 
 update_script() {
-  local script_path=""
-  local script_dir=""
-  local tmp_file=""
-  local new_version=""
-
+  local script_path script_dir tmp_file new_version
   script_path="$(resolve_script_path)" || {
-    err "无法解析脚本路径"
+    err "解析脚本路径失败"
     return 1
   }
 
@@ -1403,107 +1345,144 @@ update_script() {
 
   script_dir="$(dirname "$script_path")"
   if ! tmp_file="$(mktemp "${script_dir}/.acme.sh.update.XXXXXX")"; then
-    err "创建临时文件失败"
+    err "临时文件创建失败"
     return 1
   fi
 
   if ! curl_script_raw_retry --connect-timeout "$SCRIPT_UPDATE_CONNECT_TIMEOUT" --max-time "$SCRIPT_UPDATE_MAX_TIME" -o "$tmp_file"; then
-    remove_file_and_error "$tmp_file" "下载更新失败"
+    remove_file_and_error "$tmp_file" "更新下载失败"
     return 1
   fi
 
   if ! bash -n "$tmp_file"; then
-    remove_file_and_error "$tmp_file" "更新文件语法校验失败"
+    remove_file_and_error "$tmp_file" "更新脚本语法校验失败"
     return 1
   fi
 
   new_version="$(extract_script_version "$tmp_file")"
   if [[ -z "$new_version" ]]; then
-    remove_file_and_error "$tmp_file" "无法读取新版本号"
+    remove_file_and_error "$tmp_file" "读取新版本失败"
     return 1
   fi
 
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    log "未检测到新版本"
+    log "当前已是最新版本"
     return 0
   fi
 
   chmod 755 "$tmp_file"
   if ! mv "$tmp_file" "$script_path"; then
-    remove_file_and_error "$tmp_file" "写入更新失败: $script_path"
+    remove_file_and_error "$tmp_file" "更新写入失败: $script_path"
     return 1
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "更新成功: $SCRIPT_VERSION -> $new_version, 正在重启脚本"
+  log "更新完成: $SCRIPT_VERSION -> $new_version，正在重启"
   release_lock
   exec bash "$script_path"
   die "脚本重启失败: $script_path"
+}
+
+uninstall_script() {
+  local confirmed="0"
+  local remove_acme_home="0"
+  local script_path
+
+  prompt_yes_no_with_default confirmed "确认卸载 acme.sh 并删除本脚本? [y/N]: " "0"
+  if [[ "$confirmed" != "1" ]]; then
+    log "操作已取消"
+    return 0
+  fi
+
+  if [[ -x "$ACME_SH" ]]; then
+    if ! "$ACME_SH" --uninstall; then
+      warn "acme.sh 卸载失败，请手动处理"
+    fi
+  else
+    warn "未找到 acme.sh: $ACME_SH"
+  fi
+
+  prompt_yes_no_with_default remove_acme_home "是否删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
+  if [[ "$remove_acme_home" == "1" ]]; then
+    remove_dir_recursively_if_exists "$ACME_HOME"
+    log "目录已删除: $ACME_HOME"
+  fi
+
+  script_path="$(resolve_script_path)" || {
+    err "卸载完成，但无法解析脚本路径，请手动删除脚本文件"
+    return 1
+  }
+
+  if [[ ! -f "$script_path" ]]; then
+    release_lock
+    log "卸载完成: 脚本文件不存在 $script_path"
+    exit 0
+  fi
+
+  if [[ ! -w "$script_path" ]]; then
+    err "卸载完成，但脚本文件不可写，请手动删除: $script_path"
+    return 1
+  fi
+
+  if ! rm -f "$script_path"; then
+    err "卸载完成，但删除脚本失败: $script_path"
+    return 1
+  fi
+
+  release_lock
+  log "卸载完成: 已删除脚本 $script_path"
+  exit 0
 }
 
 print_main_menu() {
   local update_label="更新脚本"
 
   if [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-    update_label="更新脚本 (最新: $UPDATE_AVAILABLE_VERSION)"
+    update_label="更新脚本 (可用版本: $UPDATE_AVAILABLE_VERSION)"
   fi
 
   printf '\n'
-  printf '%s=== ACME 证书管理 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
+  printf '%s=== ACME 证书管理器 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
   printf '%s\n' "$REPO_URL"
   printf '\n'
-  printf ' %s1.%s 查看证书\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s2.%s 创建证书\n' "$COLOR_INDEX" "$COLOR_RESET"
-  printf ' %s3.%s 更换安装目录\n' "$COLOR_INDEX" "$COLOR_RESET"
+  printf ' %s1.%s 证书清单\n' "$COLOR_INDEX" "$COLOR_RESET"
+  printf ' %s2.%s 签发证书\n' "$COLOR_INDEX" "$COLOR_RESET"
+  printf ' %s3.%s 更新安装目录\n' "$COLOR_INDEX" "$COLOR_RESET"
   printf ' %s4.%s 删除证书\n' "$COLOR_INDEX" "$COLOR_RESET"
   printf ' %s5.%s %s\n' "$COLOR_INDEX" "$COLOR_RESET" "$update_label"
-  printf ' %s0.%s 退出\n' "$COLOR_INDEX" "$COLOR_RESET"
+  printf ' %s6.%s 卸载并删除脚本\n' "$COLOR_INDEX" "$COLOR_RESET"
   printf '\n'
 }
 
 print_usage() {
   cat <<USAGE
-交互式管理 Cloudflare DNS 的 ACME 证书
+Cloudflare DNS ACME 证书管理工具
 USAGE
 }
 
 run_menu_action() {
   local choice="$1"
-  local handler=""
+  local -a handlers=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
 
-  case "$choice" in
-    1) handler="list_certs" ;;
-    2) handler="create_cert" ;;
-    3) handler="update_cert" ;;
-    4) handler="delete_cert" ;;
-    5) handler="update_script" ;;
-    0)
-      return 2
-      ;;
-    *)
-      err "无效选项: $choice"
-      return 1
-      ;;
-  esac
+  if [[ "$choice" =~ ^[1-6]$ ]]; then
+    "${handlers[$choice]}" || true
+    return 0
+  fi
 
-  "$handler" || true
+  err "选项无效: $choice"
+  return 1
 }
 
 run_menu() {
-  local choice=""
-  local action_status=0
+  local choice
 
   while true; do
     print_main_menu
 
-    read -r -p "请输入选择 [0-5]: " choice
-    action_status=0
-    run_menu_action "$choice" || action_status=$?
-    if [[ "$action_status" -eq 2 ]]; then
-      return
-    fi
+    read_prompt_value choice "请选择 [1-6]: "
+    run_menu_action "$choice" || true
   done
 }
 
@@ -1513,7 +1492,7 @@ main() {
       print_usage
       return 0
     fi
-    die "不支持参数: $*"
+    die "不支持的参数: $*"
   fi
 
   require_root

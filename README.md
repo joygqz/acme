@@ -1,8 +1,8 @@
 # Acme
 
-交互式管理 Cloudflare DNS 的 ACME 证书
+Cloudflare DNS ACME 证书管理脚本
 
-## 一键运行
+## 快速开始
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joygqz/acme/main/acme.sh -o ./acme.sh \
