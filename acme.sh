@@ -68,6 +68,64 @@ extract_script_version() {
   awk -F'"' '/^[[:space:]]*readonly[[:space:]]+SCRIPT_VERSION=/{print $2; exit}' "$input"
 }
 
+parse_semver() {
+  local version="$1"
+  local regex='^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+
+  [[ "$version" =~ $regex ]] || return 1
+  printf '%s\t%s\t%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]}"
+}
+
+is_prerelease_newer() {
+  local candidate_pre="$1"
+  local baseline_pre="$2"
+  local -a candidate_parts=()
+  local -a baseline_parts=()
+  local i=0
+  local candidate_id=""
+  local baseline_id=""
+
+  IFS='.' read -r -a candidate_parts <<< "$candidate_pre"
+  IFS='.' read -r -a baseline_parts <<< "$baseline_pre"
+
+  while true; do
+    candidate_id="${candidate_parts[$i]:-}"
+    baseline_id="${baseline_parts[$i]:-}"
+
+    if [[ -z "$candidate_id" && -z "$baseline_id" ]]; then
+      return 1
+    fi
+    if [[ -z "$candidate_id" ]]; then
+      return 1
+    fi
+    if [[ -z "$baseline_id" ]]; then
+      return 0
+    fi
+
+    if [[ "$candidate_id" =~ ^[0-9]+$ && "$baseline_id" =~ ^[0-9]+$ ]]; then
+      if ((10#$candidate_id > 10#$baseline_id)); then
+        return 0
+      fi
+      if ((10#$candidate_id < 10#$baseline_id)); then
+        return 1
+      fi
+    elif [[ "$candidate_id" =~ ^[0-9]+$ ]]; then
+      return 1
+    elif [[ "$baseline_id" =~ ^[0-9]+$ ]]; then
+      return 0
+    else
+      if [[ "$candidate_id" > "$baseline_id" ]]; then
+        return 0
+      fi
+      if [[ "$candidate_id" < "$baseline_id" ]]; then
+        return 1
+      fi
+    fi
+
+    i=$((i + 1))
+  done
+}
+
 fetch_remote_script_version() {
   local remote_version=""
 
@@ -82,9 +140,43 @@ fetch_remote_script_version() {
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
+  local candidate_major=""
+  local candidate_minor=""
+  local candidate_patch=""
+  local candidate_pre=""
+  local baseline_major=""
+  local baseline_minor=""
+  local baseline_patch=""
+  local baseline_pre=""
 
   [[ "$candidate" != "$baseline" ]] || return 1
-  [[ "$(printf '%s\n%s\n' "$candidate" "$baseline" | sort -V | tail -n 1)" == "$candidate" ]]
+  IFS=$'\t' read -r candidate_major candidate_minor candidate_patch candidate_pre <<< "$(parse_semver "$candidate")" || return 1
+  IFS=$'\t' read -r baseline_major baseline_minor baseline_patch baseline_pre <<< "$(parse_semver "$baseline")" || return 1
+
+  if ((10#$candidate_major != 10#$baseline_major)); then
+    ((10#$candidate_major > 10#$baseline_major))
+    return
+  fi
+  if ((10#$candidate_minor != 10#$baseline_minor)); then
+    ((10#$candidate_minor > 10#$baseline_minor))
+    return
+  fi
+  if ((10#$candidate_patch != 10#$baseline_patch)); then
+    ((10#$candidate_patch > 10#$baseline_patch))
+    return
+  fi
+
+  if [[ -z "$candidate_pre" && -n "$baseline_pre" ]]; then
+    return 0
+  fi
+  if [[ -n "$candidate_pre" && -z "$baseline_pre" ]]; then
+    return 1
+  fi
+  if [[ -z "$candidate_pre" && -z "$baseline_pre" ]]; then
+    return 1
+  fi
+
+  is_prerelease_newer "$candidate_pre" "$baseline_pre"
 }
 
 check_script_update() {
@@ -810,17 +902,6 @@ issue_cert() {
   "$ACME_SH" "${issue_args[@]}"
 }
 
-apply_dns_credentials() {
-  if [[ -n "$CF_Token" ]]; then
-    export CF_Token
-    unset CF_Key CF_Email
-    return
-  fi
-
-  export CF_Key CF_Email
-  unset CF_Token
-}
-
 prompt_cf_token_credentials() {
   ensure_non_empty_input CF_Token "请输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
 
@@ -862,14 +943,6 @@ prompt_cloudflare_credentials() {
   fi
 
   prompt_cf_global_key_credentials
-}
-
-reset_create_inputs() {
-  DOMAIN=""
-  OUTPUT_DIR=""
-  CF_Key=""
-  CF_Email=""
-  CF_Token=""
 }
 
 install_cert_to_dir() {
@@ -1001,14 +1074,6 @@ prompt_inputs() {
   ensure_valid_email_input EMAIL "请输入 ACME 账号邮箱 (例如: admin@example.com): " "邮箱格式错误"
 }
 
-prompt_output_dir() {
-  local answer=""
-  local output_default="${OUTPUT_DIR:-/etc/ssl/$DOMAIN}"
-
-  read -r -p "输出目录 (默认: $output_default): " answer
-  OUTPUT_DIR="${answer:-$output_default}"
-}
-
 prompt_domain_value() {
   local prompt="$1"
   local value=""
@@ -1133,8 +1198,12 @@ list_certs() {
 
 create_cert() {
   local cert_variant=""
+  local answer=""
 
-  reset_create_inputs
+  OUTPUT_DIR=""
+  CF_Key=""
+  CF_Email=""
+  CF_Token=""
   DOMAIN="$(prompt_domain_value "请输入域名 (例如: example.com): ")"
 
   if get_cert_conf_file "$DOMAIN" >/dev/null 2>&1; then
@@ -1147,9 +1216,16 @@ create_cert() {
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
-  prompt_output_dir
+  read -r -p "输出目录 (默认: /etc/ssl/$DOMAIN): " answer
+  OUTPUT_DIR="${answer:-/etc/ssl/$DOMAIN}"
 
-  apply_dns_credentials
+  if [[ -n "$CF_Token" ]]; then
+    export CF_Token
+    unset CF_Key CF_Email
+  else
+    export CF_Key CF_Email
+    unset CF_Token
+  fi
   if ! issue_cert; then
     cleanup_domain_variant_dir "$DOMAIN" "$cert_variant"
     err "证书申请失败"
