@@ -9,7 +9,6 @@ readonly DEFAULT_DNS_PROVIDER="dns_cf"
 readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
-readonly DNS_API_DOC_URL="https://go-acme.github.io/lego/dns/"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
 readonly SCRIPT_VERSION="v1.0.0"
@@ -1130,7 +1129,7 @@ prompt_dns_api_env_vars() {
     if [[ -n "$provider_env_keys_inline" ]]; then
       err "环境变量格式无效, 需使用 KEY=VALUE, 可选 Key: $provider_env_keys_inline"
     else
-      err "环境变量格式无效, 示例: CF_Token=xxx, 文档: $DNS_API_DOC_URL"
+      err "环境变量格式无效, 请输入 KEY=VALUE"
     fi
   done
 }
@@ -1630,7 +1629,7 @@ run_menu_action() {
     return
   fi
 
-  err "选项无效: $choice (范围: 1-${MENU_MAX_CHOICE})"
+  err "选项无效: $choice"
   return 1
 }
 
