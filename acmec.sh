@@ -11,9 +11,9 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.5"
+readonly SCRIPT_VERSION="v1.0.6"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
-readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
+readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
 readonly CACHE_SECRETS_DIR="$CACHE_HOME/secrets.d"
 readonly CACHE_SCHEMA_VERSION="2"
@@ -22,14 +22,14 @@ readonly CURL_RETRY_COUNT="3"
 readonly CURL_RETRY_DELAY="1"
 readonly SCRIPT_CHECK_CONNECT_TIMEOUT="5"
 readonly SCRIPT_CHECK_MAX_TIME="15"
-readonly SCRIPT_UPDATE_CONNECT_TIMEOUT="10"
-readonly SCRIPT_UPDATE_MAX_TIME="25"
+readonly SCRIPT_UPGRADE_CONNECT_TIMEOUT="10"
+readonly SCRIPT_UPGRADE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly DNS_PROVIDER_TABLE_COLUMNS="5"
 readonly DNS_PROVIDER_TABLE_CELL_WIDTH="28"
-readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
-readonly -a MENU_LABELS=( "" "证书列表" "申请证书" "更新部署路径" "删除证书" "升级工具" "卸载工具" )
-readonly MENU_UPDATE_SCRIPT_HANDLER="update_script"
+readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "redeploy_cert" "delete_cert" "upgrade_script" "uninstall_script" )
+readonly -a MENU_LABELS=( "" "证书列表" "申请证书" "重新部署证书" "删除证书" "升级脚本" "卸载工具" )
+readonly MENU_UPGRADE_SCRIPT_HANDLER="upgrade_script"
 readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
 readonly ENV_HAS_EMAIL="${EMAIL+1}"
@@ -51,12 +51,12 @@ ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW:-0}"
 DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
 DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
-PKG_TYPE=""
+PKG_MANAGER=""
 CRON_SERVICE=""
-ACME_SH="$ACME_HOME/acme.sh"
-LOCK_FD=""
-UPDATE_AVAILABLE_VERSION=""
-DNS_API_ENV_LAST_KEYS=""
+ACME_SH_PATH="$ACME_HOME/acme.sh"
+LOCK_FILE_FD=""
+AVAILABLE_SCRIPT_VERSION=""
+DNS_API_APPLIED_KEYS=""
 
 curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
@@ -170,16 +170,16 @@ is_version_newer() {
   return 1
 }
 
-check_script_update() {
+check_script_upgrade() {
   local remote_version
-  UPDATE_AVAILABLE_VERSION=""
+  AVAILABLE_SCRIPT_VERSION=""
 
   if ! remote_version="$(fetch_remote_script_version)"; then
     return
   fi
 
   if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
-    UPDATE_AVAILABLE_VERSION="$remote_version"
+    AVAILABLE_SCRIPT_VERSION="$remote_version"
   fi
 }
 
@@ -466,17 +466,17 @@ acquire_lock() {
     return
   fi
 
-  exec {LOCK_FD}> "$LOCK_FILE"
-  if ! flock -n "$LOCK_FD"; then
+  exec {LOCK_FILE_FD}> "$LOCK_FILE"
+  if ! flock -n "$LOCK_FILE_FD"; then
     die "已有实例运行中"
   fi
 }
 
 release_lock() {
-  if [[ -n "$LOCK_FD" ]]; then
-    flock -u "$LOCK_FD" >/dev/null 2>&1 || true
-    exec {LOCK_FD}>&- || true
-    LOCK_FD=""
+  if [[ -n "$LOCK_FILE_FD" ]]; then
+    flock -u "$LOCK_FILE_FD" >/dev/null 2>&1 || true
+    exec {LOCK_FILE_FD}>&- || true
+    LOCK_FILE_FD=""
   fi
 }
 
@@ -582,13 +582,13 @@ detect_os() {
   os_like="${ID_LIKE:-}"
 
   if [[ "$os_id" =~ (ubuntu|debian) ]] || [[ "$os_like" =~ (debian) ]]; then
-    PKG_TYPE="apt"
+    PKG_MANAGER="apt"
     CRON_SERVICE="cron"
   elif [[ "$os_id" =~ (centos|rhel|rocky|almalinux|fedora) ]] || [[ "$os_like" =~ (rhel|fedora|centos) ]]; then
     if command_exists dnf; then
-      PKG_TYPE="dnf"
+      PKG_MANAGER="dnf"
     else
-      PKG_TYPE="yum"
+      PKG_MANAGER="yum"
     fi
     CRON_SERVICE="crond"
   else
@@ -655,7 +655,7 @@ install_deps() {
     return
   fi
 
-  case "$PKG_TYPE" in
+  case "$PKG_MANAGER" in
     apt)
       command_exists apt-get || die "缺少命令: apt-get"
       export DEBIAN_FRONTEND=noninteractive
@@ -663,11 +663,11 @@ install_deps() {
       apt-get install -y --no-install-recommends curl cron openssl ca-certificates
       ;;
     yum|dnf)
-      command_exists "$PKG_TYPE" || die "缺少命令: ${PKG_TYPE}"
-      "$PKG_TYPE" install -y curl cronie openssl ca-certificates
+      command_exists "$PKG_MANAGER" || die "缺少命令: ${PKG_MANAGER}"
+      "$PKG_MANAGER" install -y curl cronie openssl ca-certificates
       ;;
     *)
-      die "不支持的包管理器: $PKG_TYPE"
+      die "不支持的包管理器: $PKG_MANAGER"
       ;;
   esac
 
@@ -683,17 +683,17 @@ install_deps() {
 }
 
 install_acme_sh() {
-  if [[ ! -x "$ACME_SH" ]]; then
+  if [[ ! -x "$ACME_SH_PATH" ]]; then
     curl_https --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" --connect-timeout "$INSTALL_CONNECT_TIMEOUT" "$ACME_INSTALL_URL" \
       | sh -s "email=$EMAIL" --home "$ACME_HOME" --no-profile
   fi
 
-  if [[ ! -x "$ACME_SH" ]]; then
-    die "ACME 客户端安装失败: 未找到文件 $ACME_SH"
+  if [[ ! -x "$ACME_SH_PATH" ]]; then
+    die "ACME 客户端安装失败: 未找到文件 $ACME_SH_PATH"
   fi
 
   if [[ "${ACME_AUTO_UPGRADE:-0}" == "1" ]]; then
-    "$ACME_SH" --upgrade --auto-upgrade
+    "$ACME_SH_PATH" --upgrade --auto-upgrade
   fi
   ensure_default_ca
 }
@@ -725,11 +725,11 @@ ensure_default_ca() {
     return
   fi
 
-  "$ACME_SH" --set-default-ca --server "$DEFAULT_CA_SERVER"
+  "$ACME_SH_PATH" --set-default-ca --server "$DEFAULT_CA_SERVER"
 }
 
 prompt_install_email_if_needed() {
-  if [[ -x "$ACME_SH" ]]; then
+  if [[ -x "$ACME_SH_PATH" ]]; then
     return
   fi
 
@@ -1008,7 +1008,7 @@ issue_cert() {
     issue_args+=( --force )
   fi
 
-  "$ACME_SH" "${issue_args[@]}"
+  "$ACME_SH_PATH" "${issue_args[@]}"
 }
 
 list_dns_providers() {
@@ -1078,70 +1078,70 @@ validate_dns_api_env_vars() {
 }
 
 prompt_dns_provider() {
-  local provider_input current_provider providers
-  current_provider="$DNS_PROVIDER"
+  local selected_provider default_provider provider_list
+  default_provider="$DNS_PROVIDER"
 
-  if providers="$(list_dns_providers)"; then
-    print_dns_providers_table "$providers"
+  if provider_list="$(list_dns_providers)"; then
+    print_dns_providers_table "$provider_list"
   fi
 
   while true; do
-    read_prompt_value provider_input "DNS Provider (默认: $current_provider): "
-    provider_input="${provider_input:-$current_provider}"
+    read_prompt_value selected_provider "DNS Provider (默认: $default_provider): "
+    selected_provider="${selected_provider:-$default_provider}"
 
-    if [[ ! "$provider_input" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
-      err "DNS Provider 格式无效: $provider_input"
+    if [[ ! "$selected_provider" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
+      err "DNS Provider 格式无效: $selected_provider"
       continue
     fi
-    if [[ -d "$ACME_HOME/dnsapi" && ! -f "$ACME_HOME/dnsapi/${provider_input}.sh" ]]; then
-      err "DNS Provider 不存在: $provider_input"
+    if [[ -d "$ACME_HOME/dnsapi" && ! -f "$ACME_HOME/dnsapi/${selected_provider}.sh" ]]; then
+      err "DNS Provider 不存在: $selected_provider"
       continue
     fi
-    DNS_PROVIDER="$provider_input"
+    DNS_PROVIDER="$selected_provider"
     return
   done
 }
 
 prompt_dns_api_env_vars() {
-  local input_env_vars provider_env_keys_inline="" prompt use_cached_dns_env_vars="1"
+  local dns_env_input provider_key_hints="" prompt use_cached_env="1"
 
   if [[ -n "$DNS_API_ENV_VARS" && -z "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
     prompt_yes_no_with_default \
-      use_cached_dns_env_vars \
+      use_cached_env \
       "检测到 $DNS_PROVIDER 缓存, 是否使用 [Y/n]: " \
       "1"
-    if [[ "$use_cached_dns_env_vars" == "1" ]]; then
+    if [[ "$use_cached_env" == "1" ]]; then
       return
     fi
   fi
 
-  if provider_env_keys_inline="$(list_dns_provider_env_keys "$DNS_PROVIDER" 2>/dev/null)"; then
-    provider_env_keys_inline="${provider_env_keys_inline//$'\n'/, }"
-    provider_env_keys_inline="${provider_env_keys_inline%, }"
+  if provider_key_hints="$(list_dns_provider_env_keys "$DNS_PROVIDER" 2>/dev/null)"; then
+    provider_key_hints="${provider_key_hints//$'\n'/, }"
+    provider_key_hints="${provider_key_hints%, }"
   fi
 
-  if [[ -n "$provider_env_keys_inline" ]]; then
-    log "可用 DNS 变量 Key: $provider_env_keys_inline"
+  if [[ -n "$provider_key_hints" ]]; then
+    log "可用 DNS 凭据 Key: $provider_key_hints"
   fi
 
-  prompt="DNS 变量 (KEY=VALUE, 空格分隔): "
+  prompt="DNS 凭据 (KEY=VALUE, 空格分隔): "
   if [[ -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
-    prompt="DNS 变量 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
+    prompt="DNS 凭据 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
   fi
 
   while true; do
-    read_prompt_value input_env_vars "$prompt"
-    if [[ -z "$input_env_vars" && -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+    read_prompt_value dns_env_input "$prompt"
+    if [[ -z "$dns_env_input" && -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
       return
     fi
-    if validate_dns_api_env_vars "$input_env_vars"; then
-      DNS_API_ENV_VARS="$input_env_vars"
+    if validate_dns_api_env_vars "$dns_env_input"; then
+      DNS_API_ENV_VARS="$dns_env_input"
       return
     fi
-    if [[ -n "$provider_env_keys_inline" ]]; then
-      err "变量格式无效, 需使用 KEY=VALUE, 可用 Key: $provider_env_keys_inline"
+    if [[ -n "$provider_key_hints" ]]; then
+      err "凭据格式无效, 需使用 KEY=VALUE, 可用 Key: $provider_key_hints"
     else
-      err "变量格式无效, 请输入 KEY=VALUE"
+      err "凭据格式无效, 请输入 KEY=VALUE"
     fi
   done
 }
@@ -1159,15 +1159,15 @@ prompt_dns_credentials() {
 clear_applied_dns_api_env() {
   local env_key
   local -a env_keys=()
-  read -r -a env_keys <<< "${DNS_API_ENV_LAST_KEYS:-}"
+  read -r -a env_keys <<< "${DNS_API_APPLIED_KEYS:-}"
   ((${#env_keys[@]} > 0)) || {
-    DNS_API_ENV_LAST_KEYS=""
+    DNS_API_APPLIED_KEYS=""
     return 0
   }
   for env_key in "${env_keys[@]}"; do
     export "$env_key="
   done
-  DNS_API_ENV_LAST_KEYS=""
+  DNS_API_APPLIED_KEYS=""
 }
 
 apply_dns_credentials_env() {
@@ -1181,7 +1181,7 @@ apply_dns_credentials_env() {
     env_key="${env_pair%%=*}"
     env_value="${env_pair#*=}"
     export "$env_key=$env_value"
-    DNS_API_ENV_LAST_KEYS+="${env_key} "
+    DNS_API_APPLIED_KEYS+="${env_key} "
   done
 }
 
@@ -1207,7 +1207,7 @@ install_cert_to_dir() {
     install_args+=( --ecc )
   fi
 
-  run_or_error "证书部署命令执行失败: $cert_domain" "$ACME_SH" "${install_args[@]}" || return 1
+  run_or_error "证书部署命令执行失败: $cert_domain" "$ACME_SH_PATH" "${install_args[@]}" || return 1
 
   run_or_error "私钥权限设置失败: $cert_dir/$cert_domain.key" chmod 600 "$cert_dir/$cert_domain.key" || return 1
   run_or_error "证书文件权限设置失败: $cert_dir" chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer" || return 1
@@ -1216,15 +1216,15 @@ install_cert_to_dir() {
 prompt_existing_cert_domain() {
   local target_var="$1"
   local prompt="$2"
-  local raw_list parsed_rows selected_domain
-  raw_list="$("$ACME_SH" --list --listraw)" || return 1
-  parsed_rows="$(parse_cert_list_rows "$raw_list")"
-  if [[ -z "$parsed_rows" ]]; then
+  local cert_list_raw cert_rows selected_domain
+  cert_list_raw="$("$ACME_SH_PATH" --list --listraw)" || return 1
+  cert_rows="$(parse_cert_list_rows "$cert_list_raw")"
+  if [[ -z "$cert_rows" ]]; then
     log "未发现证书记录"
     return 1
   fi
 
-  print_cert_list "$raw_list" "$parsed_rows" || return 1
+  print_cert_list "$cert_list_raw" "$cert_rows" || return 1
 
   while true; do
     selected_domain="$(prompt_domain_value "$prompt")"
@@ -1328,8 +1328,8 @@ prompt_domain_value() {
 }
 
 parse_cert_list_rows() {
-  local raw_list="$1"
-  printf '%s\n' "$raw_list" | awk -F'|' '
+  local cert_list_raw="$1"
+  printf '%s\n' "$cert_list_raw" | awk -F'|' '
     function trim(v) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
       return v
@@ -1377,15 +1377,15 @@ parse_cert_list_rows() {
 }
 
 print_cert_list() {
-  local raw_list="$1"
-  local parsed_rows="${2:-}"
+  local cert_list_raw="$1"
+  local cert_rows="${2:-}"
   local border row_variant
   local main_domain key_length san_domains ca created renew install_dir
   local main_domain_fmt key_length_fmt san_domains_fmt ca_fmt created_fmt renew_fmt install_dir_fmt
-  if [[ -z "$parsed_rows" ]]; then
-    parsed_rows="$(parse_cert_list_rows "$raw_list")"
+  if [[ -z "$cert_rows" ]]; then
+    cert_rows="$(parse_cert_list_rows "$cert_list_raw")"
   fi
-  if [[ -z "$parsed_rows" ]]; then
+  if [[ -z "$cert_rows" ]]; then
     log "未发现证书记录"
     return 0
   fi
@@ -1416,15 +1416,15 @@ print_cert_list() {
       "$created_fmt" \
       "$renew_fmt" \
       "$install_dir_fmt"
-  done <<< "$parsed_rows"
+  done <<< "$cert_rows"
 
   printf '%s\n' "$border"
 }
 
 list_certs() {
-  local raw_list
-  raw_list="$("$ACME_SH" --list --listraw)" || return 1
-  print_cert_list "$raw_list"
+  local cert_list_raw
+  cert_list_raw="$("$ACME_SH_PATH" --list --listraw)" || return 1
+  print_cert_list "$cert_list_raw"
 }
 
 create_cert() {
@@ -1456,31 +1456,31 @@ create_cert() {
   log "证书申请完成: $DOMAIN -> $OUTPUT_DIR"
 }
 
-update_cert() {
+redeploy_cert() {
   local target_domain cert_variant cert_dir
-  resolve_existing_cert_target target_domain cert_variant "待更新部署路径的域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待重新部署证书的域名: " || return 1
   cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   if [[ "$cert_dir" == "-" ]]; then
     cert_dir="$(default_output_dir_for_domain "$target_domain")"
   fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
-  run_or_error "部署路径更新失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
+  run_or_error "证书重新部署失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
   remember_deploy_base_dir "$target_domain" "$cert_dir"
-  log "部署路径更新完成: $target_domain -> $cert_dir"
+  log "证书重新部署完成: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
   local target_domain cert_variant acme_dir
   local -a remove_args=()
 
-  resolve_existing_cert_target target_domain cert_variant "待删除的域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待删除证书域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
     remove_args+=( --ecc )
   fi
-  run_or_error "证书删除命令执行失败: $target_domain" "$ACME_SH" "${remove_args[@]}" || return 1
+  run_or_error "证书删除命令执行失败: $target_domain" "$ACME_SH_PATH" "${remove_args[@]}" || return 1
 
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   run_or_error "证书目录清理失败: $acme_dir" remove_dir_recursively_if_exists "$acme_dir" || return 1
@@ -1488,7 +1488,7 @@ delete_cert() {
   log "证书删除完成: $target_domain"
 }
 
-update_script() {
+upgrade_script() {
   local script_path script_dir tmp_file new_version
   resolve_script_path_or_error script_path || return 1
 
@@ -1508,7 +1508,7 @@ update_script() {
     return 1
   fi
 
-  if ! curl_script_raw_retry --connect-timeout "$SCRIPT_UPDATE_CONNECT_TIMEOUT" --max-time "$SCRIPT_UPDATE_MAX_TIME" -o "$tmp_file"; then
+  if ! curl_script_raw_retry --connect-timeout "$SCRIPT_UPGRADE_CONNECT_TIMEOUT" --max-time "$SCRIPT_UPGRADE_MAX_TIME" -o "$tmp_file"; then
     remove_file_and_error "$tmp_file" "升级下载失败"
     return 1
   fi
@@ -1526,7 +1526,7 @@ update_script() {
 
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
-    UPDATE_AVAILABLE_VERSION=""
+    AVAILABLE_SCRIPT_VERSION=""
     log "当前已是最新版本"
     return 0
   fi
@@ -1537,8 +1537,8 @@ update_script() {
     return 1
   fi
 
-  UPDATE_AVAILABLE_VERSION=""
-  log "工具升级完成: $SCRIPT_VERSION -> $new_version, 正在重启"
+  AVAILABLE_SCRIPT_VERSION=""
+  log "脚本升级完成: $SCRIPT_VERSION -> $new_version, 正在重启"
   save_cache_or_warn
   release_lock
   exec bash "$script_path"
@@ -1551,9 +1551,9 @@ uninstall_script() {
   prompt_yes_no_with_default confirmed "确认卸载并清理数据 [y/N]: " "0"
   [[ "$confirmed" == "1" ]] || { log "已取消卸载"; return 0; }
 
-  if [[ ! -x "$ACME_SH" ]]; then
-    warn "未找到 ACME 客户端: $ACME_SH"
-  elif ! "$ACME_SH" --uninstall; then
+  if [[ ! -x "$ACME_SH_PATH" ]]; then
+    warn "未找到 ACME 客户端: $ACME_SH_PATH"
+  elif ! "$ACME_SH_PATH" --uninstall; then
     warn "ACME 客户端卸载失败, 请手动处理"
   fi
 
@@ -1590,13 +1590,13 @@ print_main_menu() {
   fi
 
   printf '\n'
-  printf '%s=== ACME 证书运维 %s ===%s\n' "$menu_color" "$SCRIPT_VERSION" "$color_reset"
+  printf '%s=== ACME 证书管理 %s ===%s\n' "$menu_color" "$SCRIPT_VERSION" "$color_reset"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
     label="${MENU_LABELS[$menu_idx]}"
-    if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPDATE_SCRIPT_HANDLER" && -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-      label="${label} (新版本: $UPDATE_AVAILABLE_VERSION)"
+    if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPGRADE_SCRIPT_HANDLER" && -n "$AVAILABLE_SCRIPT_VERSION" ]]; then
+      label="${label} (新版本: $AVAILABLE_SCRIPT_VERSION)"
     fi
     printf ' %s%d.%s %s\n' "$menu_color" "$menu_idx" "$color_reset" "$label"
   done
@@ -1657,7 +1657,7 @@ run_menu() {
 main() {
   if [[ "$#" -gt 0 ]]; then
     if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
-      log "ACME DNS 运维脚本"
+      log "ACME 证书管理脚本"
       return 0
     fi
     die "不支持参数: $*"
@@ -1671,7 +1671,7 @@ main() {
   install_deps
   prompt_install_email_if_needed
   install_acme_sh
-  check_script_update
+  check_script_upgrade
   save_cache_or_warn
   run_menu
 }
