@@ -285,7 +285,7 @@ remove_empty_dir_quietly() {
 
 remove_dir_recursively_if_exists() {
   local dir_path="$1"
-  [[ -d "$dir_path" ]] || return
+  [[ -d "$dir_path" ]] || return 0
   rm -rf "$dir_path"
 }
 
