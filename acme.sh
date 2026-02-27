@@ -65,7 +65,37 @@ resolve_script_path() {
 
 extract_script_version() {
   local input="${1:--}"
-  awk -F'"' '/^[[:space:]]*readonly[[:space:]]+SCRIPT_VERSION=/{print $2; exit}' "$input"
+  awk '
+    BEGIN {
+      found = 0
+    }
+    {
+      if (found) {
+        next
+      }
+
+      line = $0
+      sub(/\r$/, "", line)
+
+      if (line ~ /^[[:space:]]*(readonly[[:space:]]+)?SCRIPT_VERSION[[:space:]]*=/) {
+        sub(/^[[:space:]]*(readonly[[:space:]]+)?SCRIPT_VERSION[[:space:]]*=[[:space:]]*/, "", line)
+        sub(/[[:space:]]*(#.*)?$/, "", line)
+
+        if (length(line) >= 2) {
+          first = substr(line, 1, 1)
+          last = substr(line, length(line), 1)
+          if (first == last && (first == "\"" || first == "\047")) {
+            line = substr(line, 2, length(line) - 2)
+          }
+        }
+
+        if (line != "") {
+          print line
+          found = 1
+        }
+      }
+    }
+  ' "$input"
 }
 
 parse_semver() {
