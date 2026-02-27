@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.4"
+readonly SCRIPT_VERSION="v1.0.5"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -28,7 +28,7 @@ readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly DNS_PROVIDER_TABLE_COLUMNS="5"
 readonly DNS_PROVIDER_TABLE_CELL_WIDTH="28"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
-readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
+readonly -a MENU_LABELS=( "" "证书列表" "申请证书" "更新部署路径" "删除证书" "升级工具" "卸载工具" )
 readonly MENU_UPDATE_SCRIPT_HANDLER="update_script"
 readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
@@ -84,7 +84,7 @@ resolve_script_path() {
 
 resolve_script_path_or_error() {
   local target_var="$1"
-  local error_msg="${2:-解析脚本路径失败}"
+  local error_msg="${2:-脚本路径解析失败}"
   local resolved_path
   if ! resolved_path="$(resolve_script_path)"; then
     err "$error_msg"
@@ -355,7 +355,7 @@ ensure_cache_schema_compatible() {
 
   if [[ "$cached_schema" != "$CACHE_SCHEMA_VERSION" ]]; then
     reset_persistent_cache_files
-    warn "缓存结构变更, 已重置缓存"
+    warn "缓存结构变更, 缓存已重置"
     return
   fi
 }
@@ -414,13 +414,13 @@ save_persistent_cache() {
 
 save_cache_or_warn() {
   if ! save_persistent_cache; then
-    warn "缓存写入失败: $CACHE_HOME"
+    warn "缓存保存失败: $CACHE_HOME"
   fi
 }
 
 load_cache_or_warn() {
   if ! load_persistent_cache; then
-    warn "缓存加载失败: $CACHE_HOME"
+    warn "缓存读取失败: $CACHE_HOME"
   fi
 }
 
@@ -462,7 +462,7 @@ acquire_lock() {
   mkdir -p "$(dirname "$LOCK_FILE")"
 
   if ! command_exists flock; then
-    warn "未检测到 flock, 跳过并发锁"
+    warn "未找到 flock, 跳过并发锁"
     return
   fi
 
@@ -566,13 +566,13 @@ ensure_valid_email_input() {
 }
 
 require_root() {
-  [[ "${EUID}" -eq 0 ]] || die "需使用 root 运行"
+  [[ "${EUID}" -eq 0 ]] || die "需要 root 权限运行"
 }
 
 detect_os() {
   local os_id os_like
   if [[ ! -f /etc/os-release ]]; then
-    die "系统识别失败: 缺少 /etc/os-release"
+    die "系统识别失败: 缺少文件 /etc/os-release"
   fi
 
   # shellcheck disable=SC1091
@@ -602,20 +602,20 @@ has_ca_bundle() {
 
 warn_service_action_failed() {
   local action="$1"
-  warn "${CRON_SERVICE} ${action}失败, 需手动处理"
+  warn "${CRON_SERVICE} ${action}失败, 请手动处理"
 }
 
 enable_non_systemd_service_autostart() {
   if command_exists chkconfig; then
     if ! chkconfig "$CRON_SERVICE" on >/dev/null 2>&1; then
-      warn_service_action_failed "设置开机自启"
+      warn_service_action_failed "设置开机启动"
     fi
     return
   fi
 
   if command_exists update-rc.d; then
     if ! update-rc.d "$CRON_SERVICE" defaults >/dev/null 2>&1; then
-      warn_service_action_failed "设置开机自启"
+      warn_service_action_failed "设置开机启动"
     fi
   fi
 }
@@ -637,7 +637,7 @@ ensure_cron_service_running() {
   fi
 
   if ! command_exists service; then
-    warn "未检测到 systemctl/service, 跳过 ${CRON_SERVICE} 自动管理"
+    warn "未检测到 systemctl/service, 跳过 ${CRON_SERVICE} 管理"
     return
   fi
 
@@ -673,10 +673,10 @@ install_deps() {
 
   missing_deps="$(get_missing_base_dependencies)"
   if [[ -n "$missing_deps" ]]; then
-    die "依赖安装后缺少命令: $missing_deps"
+    die "依赖安装后仍缺少命令: $missing_deps"
   fi
   if ! has_ca_bundle; then
-    die "依赖安装后缺少 CA 证书"
+    die "依赖安装后仍缺少 CA 证书"
   fi
 
   ensure_cron_service_running
@@ -689,7 +689,7 @@ install_acme_sh() {
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    die "ACME 客户端安装失败: 未找到 $ACME_SH"
+    die "ACME 客户端安装失败: 未找到文件 $ACME_SH"
   fi
 
   if [[ "${ACME_AUTO_UPGRADE:-0}" == "1" ]]; then
@@ -733,7 +733,7 @@ prompt_install_email_if_needed() {
     return
   fi
 
-  ensure_valid_email_input EMAIL "首次部署请输入 ACME 邮箱: " "邮箱格式无效"
+  ensure_valid_email_input EMAIL "ACME 邮箱: " "邮箱格式无效"
 }
 
 get_cert_conf_file() {
@@ -832,7 +832,7 @@ select_cert_variant_for_domain() {
 
   if [[ "$has_ecc" == "1" && "$has_rsa" == "1" ]]; then
     while true; do
-      read_prompt_value answer "检测到 ECC/RSA, 请选择 [1] ECC [2] RSA: "
+      read_prompt_value answer "检测到 ECC 和 RSA, 请选择 [1] ECC [2] RSA: "
       case "$answer" in
         1)
           printf -v "$target_var" '%s' "ecc"
@@ -883,7 +883,7 @@ prompt_option_with_default() {
   local option_idx=0
 
   if (( ${#option_map[@]} == 0 || (${#option_map[@]} % 2) != 0 )); then
-    die "选项配置异常: $prompt"
+    die "选项配置错误: $prompt"
   fi
 
   while true; do
@@ -927,7 +927,7 @@ prompt_yes_no_with_default() {
         return
         ;;
       *)
-        err "请输入 y/n"
+        err "请输入 y 或 n"
         ;;
     esac
   done
@@ -957,15 +957,15 @@ normalize_issue_options() {
 
 prompt_issue_options() {
   local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
-  local force_renew_prompt="是否强制重新签发 [y/N]: "
+  local force_renew_prompt="是否强制重签 [y/N]: "
 
   normalize_issue_options
 
   prompt_option_with_default \
     ISSUE_KEY_TYPE \
-    "密钥算法 [1] ec-256 [2] ec-384 [3] rsa-2048 [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
+    "密钥类型 [1] ec-256 [2] ec-384 [3] rsa-2048 [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
     "$ISSUE_KEY_TYPE" \
-    "密钥算法选项无效" \
+    "密钥类型无效" \
     "1" "ec-256" \
     "2" "ec-384" \
     "3" "2048" \
@@ -973,7 +973,7 @@ prompt_issue_options() {
 
   prompt_option_with_default \
     ISSUE_CA_SERVER \
-    "CA 提供方 [1] letsencrypt [2] zerossl [3] buypass (默认: $ISSUE_CA_SERVER): " \
+    "CA 服务 [1] letsencrypt [2] zerossl [3] buypass (默认: $ISSUE_CA_SERVER): " \
     "$ISSUE_CA_SERVER" \
     "CA 选项无效" \
     "1" "letsencrypt" \
@@ -984,7 +984,7 @@ prompt_issue_options() {
     wildcard_prompt="是否签发泛域名 *.$DOMAIN [Y/n]: "
   fi
   if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
-    force_renew_prompt="是否强制重新签发 [Y/n]: "
+    force_renew_prompt="是否强制重签 [Y/n]: "
   fi
 
   prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
@@ -1043,7 +1043,7 @@ print_dns_providers_table() {
   local provider display_provider
   local idx=0
 
-  log "可选 DNS Provider 列表:"
+  log "DNS Provider 列表:"
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
     display_provider="$(truncate_text "$provider" "$cell_width")"
@@ -1094,7 +1094,7 @@ prompt_dns_provider() {
       continue
     fi
     if [[ -d "$ACME_HOME/dnsapi" && ! -f "$ACME_HOME/dnsapi/${provider_input}.sh" ]]; then
-      err "未找到 DNS Provider: $provider_input"
+      err "DNS Provider 不存在: $provider_input"
       continue
     fi
     DNS_PROVIDER="$provider_input"
@@ -1103,28 +1103,30 @@ prompt_dns_provider() {
 }
 
 prompt_dns_api_env_vars() {
-  local input_env_vars provider_env_keys="" provider_env_keys_inline="" prompt use_cached_dns_env_vars="1"
-  if provider_env_keys="$(list_dns_provider_env_keys "$DNS_PROVIDER")"; then
-    provider_env_keys_inline="${provider_env_keys//$'\n'/, }"
-    provider_env_keys_inline="${provider_env_keys_inline%, }"
-    if [[ -n "$provider_env_keys_inline" ]]; then
-      log "当前 DNS 环境变量 Key: $provider_env_keys_inline"
-    fi
-  fi
+  local input_env_vars provider_env_keys_inline="" prompt use_cached_dns_env_vars="1"
 
   if [[ -n "$DNS_API_ENV_VARS" && -z "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
     prompt_yes_no_with_default \
       use_cached_dns_env_vars \
-      "检测到 $DNS_PROVIDER 缓存, 是否直接使用 [Y/n]: " \
+      "检测到 $DNS_PROVIDER 缓存, 是否使用 [Y/n]: " \
       "1"
     if [[ "$use_cached_dns_env_vars" == "1" ]]; then
       return
     fi
   fi
 
-  prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔): "
+  if provider_env_keys_inline="$(list_dns_provider_env_keys "$DNS_PROVIDER" 2>/dev/null)"; then
+    provider_env_keys_inline="${provider_env_keys_inline//$'\n'/, }"
+    provider_env_keys_inline="${provider_env_keys_inline%, }"
+  fi
+
+  if [[ -n "$provider_env_keys_inline" ]]; then
+    log "可用 DNS 变量 Key: $provider_env_keys_inline"
+  fi
+
+  prompt="DNS 变量 (KEY=VALUE, 空格分隔): "
   if [[ -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
-    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
+    prompt="DNS 变量 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
   fi
 
   while true; do
@@ -1137,9 +1139,9 @@ prompt_dns_api_env_vars() {
       return
     fi
     if [[ -n "$provider_env_keys_inline" ]]; then
-      err "环境变量格式无效, 需使用 KEY=VALUE, 可选 Key: $provider_env_keys_inline"
+      err "变量格式无效, 需使用 KEY=VALUE, 可用 Key: $provider_env_keys_inline"
     else
-      err "环境变量格式无效, 请输入 KEY=VALUE"
+      err "变量格式无效, 请输入 KEY=VALUE"
     fi
   done
 }
@@ -1218,7 +1220,7 @@ prompt_existing_cert_domain() {
   raw_list="$("$ACME_SH" --list --listraw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
-    log "未检测到证书记录"
+    log "未发现证书记录"
     return 1
   fi
 
@@ -1313,7 +1315,7 @@ prompt_domain_value() {
   while true; do
     read_prompt_value value "$prompt"
     if [[ -z "$value" ]]; then
-      err "域名不能为空"
+      err "请输入域名"
       continue
     fi
     if ! is_valid_domain "$value"; then
@@ -1384,7 +1386,7 @@ print_cert_list() {
     parsed_rows="$(parse_cert_list_rows "$raw_list")"
   fi
   if [[ -z "$parsed_rows" ]]; then
-    log "未检测到证书记录"
+    log "未发现证书记录"
     return 0
   fi
 
@@ -1427,7 +1429,7 @@ list_certs() {
 
 create_cert() {
   local cert_variant cert_dir default_output_dir
-  DOMAIN="$(prompt_domain_value "请输入域名 (示例: example.com): ")"
+  DOMAIN="$(prompt_domain_value "域名 (示例: example.com): ")"
 
   if cert_domain_exists "$DOMAIN"; then
     err "证书已存在: $DOMAIN"
@@ -1445,34 +1447,34 @@ create_cert() {
   if ! issue_cert; then
     cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
     remove_dir_recursively_if_exists "$cert_dir"
-    err "证书签发失败"
+    err "证书申请失败"
     return 1
   fi
   run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
-  log "证书已签发: $DOMAIN -> $OUTPUT_DIR"
+  log "证书申请完成: $DOMAIN -> $OUTPUT_DIR"
 }
 
 update_cert() {
   local target_domain cert_variant cert_dir
-  resolve_existing_cert_target target_domain cert_variant "请输入需更新证书路径的域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待更新部署路径的域名: " || return 1
   cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   if [[ "$cert_dir" == "-" ]]; then
     cert_dir="$(default_output_dir_for_domain "$target_domain")"
   fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
-  run_or_error "证书路径更新失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
+  run_or_error "部署路径更新失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
   remember_deploy_base_dir "$target_domain" "$cert_dir"
-  log "证书路径已更新: $target_domain -> $cert_dir"
+  log "部署路径更新完成: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
   local target_domain cert_variant acme_dir
   local -a remove_args=()
 
-  resolve_existing_cert_target target_domain cert_variant "请输入待删除证书域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待删除的域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
@@ -1483,7 +1485,7 @@ delete_cert() {
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   run_or_error "证书目录清理失败: $acme_dir" remove_dir_recursively_if_exists "$acme_dir" || return 1
 
-  log "证书已删除: $target_domain"
+  log "证书删除完成: $target_domain"
 }
 
 update_script() {
@@ -1525,7 +1527,7 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    log "已是最新版本"
+    log "当前已是最新版本"
     return 0
   fi
 
@@ -1536,7 +1538,7 @@ update_script() {
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "脚本已升级: $SCRIPT_VERSION -> $new_version, 重启中"
+  log "工具升级完成: $SCRIPT_VERSION -> $new_version, 正在重启"
   save_cache_or_warn
   release_lock
   exec bash "$script_path"
@@ -1546,20 +1548,20 @@ update_script() {
 uninstall_script() {
   local confirmed script_path
 
-  prompt_yes_no_with_default confirmed "确认卸载并清理数据? [y/N]: " "0"
-  [[ "$confirmed" == "1" ]] || { log "卸载已取消"; return 0; }
+  prompt_yes_no_with_default confirmed "确认卸载并清理数据 [y/N]: " "0"
+  [[ "$confirmed" == "1" ]] || { log "已取消卸载"; return 0; }
 
   if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 ACME 客户端: $ACME_SH"
   elif ! "$ACME_SH" --uninstall; then
-    warn "ACME 客户端卸载失败, 需手动处理"
+    warn "ACME 客户端卸载失败, 请手动处理"
   fi
 
   run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
-  log "目录已清理: $ACME_HOME"
+  log "目录清理完成: $ACME_HOME"
 
   run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
-  log "目录已清理: $CACHE_HOME"
+  log "目录清理完成: $CACHE_HOME"
 
   resolve_script_path_or_error script_path "脚本路径解析失败, 请手动删除脚本" || return 1
 
@@ -1572,7 +1574,7 @@ uninstall_script() {
       err "脚本删除失败, 请手动处理: $script_path"
       return 1
     fi
-    log "脚本已删除: $script_path"
+    log "脚本删除完成: $script_path"
   fi
 
   release_lock
@@ -1588,13 +1590,13 @@ print_main_menu() {
   fi
 
   printf '\n'
-  printf '%s=== ACME 证书管理 %s ===%s\n' "$menu_color" "$SCRIPT_VERSION" "$color_reset"
+  printf '%s=== ACME 证书运维 %s ===%s\n' "$menu_color" "$SCRIPT_VERSION" "$color_reset"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
     label="${MENU_LABELS[$menu_idx]}"
     if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPDATE_SCRIPT_HANDLER" && -n "$UPDATE_AVAILABLE_VERSION" ]]; then
-      label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
+      label="${label} (新版本: $UPDATE_AVAILABLE_VERSION)"
     fi
     printf ' %s%d.%s %s\n' "$menu_color" "$menu_idx" "$color_reset" "$label"
   done
@@ -1605,19 +1607,19 @@ validate_menu_config() {
   local menu_idx handler_name label_name
 
   if [[ "${#MENU_HANDLERS[@]}" -ne "${#MENU_LABELS[@]}" ]]; then
-    die "菜单配置异常: handlers=${#MENU_HANDLERS[@]}, labels=${#MENU_LABELS[@]}"
+    die "菜单配置错误: handlers=${#MENU_HANDLERS[@]}, labels=${#MENU_LABELS[@]}"
   fi
   if ((MENU_MAX_CHOICE < 1)); then
-    die "菜单配置异常: 无可用功能"
+    die "菜单配置错误: 无可用功能"
   fi
 
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
     handler_name="${MENU_HANDLERS[$menu_idx]}"
     label_name="${MENU_LABELS[$menu_idx]}"
 
-    [[ -n "$handler_name" ]] || die "菜单配置异常: 空处理函数(index=$menu_idx)"
-    [[ -n "$label_name" ]] || die "菜单配置异常: 空菜单文案(index=$menu_idx)"
-    declare -F "$handler_name" >/dev/null || die "菜单配置异常: 处理函数不存在: $handler_name"
+    [[ -n "$handler_name" ]] || die "菜单配置错误: 空处理函数(index=$menu_idx)"
+    [[ -n "$label_name" ]] || die "菜单配置错误: 空菜单文案(index=$menu_idx)"
+    declare -F "$handler_name" >/dev/null || die "菜单配置错误: 处理函数不存在: $handler_name"
   done
 }
 
@@ -1655,10 +1657,10 @@ run_menu() {
 main() {
   if [[ "$#" -gt 0 ]]; then
     if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
-      log "DNS API ACME 管理脚本"
+      log "ACME DNS 运维脚本"
       return 0
     fi
-    die "不支持的参数: $*"
+    die "不支持参数: $*"
   fi
 
   require_root
