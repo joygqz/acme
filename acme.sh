@@ -21,7 +21,7 @@ readonly SCRIPT_UPDATE_CONNECT_TIMEOUT="10"
 readonly SCRIPT_UPDATE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
-readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新安装目录" "删除证书" "更新脚本" "卸载并删除脚本" )
+readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -270,7 +270,7 @@ write_dir_lock_state() {
 }
 
 lock_conflict() {
-  die "已存在运行中的实例，请稍后重试"
+  die "已有实例运行中"
 }
 
 acquire_lock() {
@@ -405,7 +405,7 @@ read_prompt_value() {
   fi
 
   if ((read_status != 0)); then
-    die "输入已中断"
+    die "输入中断"
   fi
 
   printf -v "$target_var" '%s' "$input_value"
@@ -455,7 +455,7 @@ ensure_valid_email_input() {
 }
 
 require_root() {
-  [[ "${EUID}" -eq 0 ]] || die "请以 root 用户运行"
+  [[ "${EUID}" -eq 0 ]] || die "需使用 root 运行"
 }
 
 detect_os() {
@@ -491,7 +491,7 @@ has_ca_bundle() {
 
 warn_service_action_failed() {
   local action="$1"
-  warn "${action}${CRON_SERVICE}失败，请手动处理"
+  warn "${action}${CRON_SERVICE}失败，需手动处理"
 }
 
 enable_non_systemd_service_autostart() {
@@ -526,7 +526,7 @@ ensure_cron_service_running() {
   fi
 
   if ! command_exists service; then
-    warn "未检测到 systemctl/service，无法自动管理 ${CRON_SERVICE}"
+    warn "未检测到 systemctl/service，跳过 ${CRON_SERVICE} 自动管理"
     return
   fi
 
@@ -565,7 +565,7 @@ install_deps() {
     die "依赖安装后缺少命令: $missing_deps"
   fi
   if ! has_ca_bundle; then
-    die "依赖安装后缺少 CA 证书文件"
+    die "依赖安装后缺少 CA 证书"
   fi
 
   ensure_cron_service_running
@@ -626,7 +626,7 @@ prompt_install_email_if_needed() {
     EMAIL="$CF_Email"
   fi
 
-  ensure_valid_email_input EMAIL "首次安装，请输入 ACME 邮箱: " "邮箱格式无效"
+  ensure_valid_email_input EMAIL "首次部署请输入 ACME 邮箱: " "邮箱格式无效"
 }
 
 get_cert_conf_file() {
@@ -736,7 +736,7 @@ select_cert_variant_for_domain() {
           return 0
           ;;
         *)
-          err "选项无效，请重试"
+          err "选项无效"
           ;;
       esac
     done
@@ -854,7 +854,7 @@ prompt_issue_options() {
     ISSUE_KEY_TYPE \
     "密钥算法 [1] ec-256 [2] ec-384 [3] rsa-2048 [4] rsa-4096 (默认: $ISSUE_KEY_TYPE): " \
     "$ISSUE_KEY_TYPE" \
-    "密钥算法选项无效，请重试" \
+    "密钥算法选项无效" \
     "1" "ec-256" \
     "2" "ec-384" \
     "3" "2048" \
@@ -864,7 +864,7 @@ prompt_issue_options() {
     ISSUE_CA_SERVER \
     "CA 提供方 [1] letsencrypt [2] zerossl [3] buypass (默认: $ISSUE_CA_SERVER): " \
     "$ISSUE_CA_SERVER" \
-    "CA 选项无效，请重试" \
+    "CA 选项无效" \
     "1" "letsencrypt" \
     "2" "zerossl" \
     "3" "buypass"
@@ -901,15 +901,15 @@ issue_cert() {
 }
 
 prompt_cf_token_credentials() {
-  ensure_non_empty_input CF_Token "输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
+  ensure_non_empty_input CF_Token "请输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
 
   CF_Key=""
   CF_Email=""
 }
 
 prompt_cf_global_key_credentials() {
-  ensure_valid_email_input CF_Email "输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式无效"
-  ensure_non_empty_input CF_Key "输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
+  ensure_valid_email_input CF_Email "请输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式无效"
+  ensure_non_empty_input CF_Key "请输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
 
   CF_Token=""
 }
@@ -930,7 +930,7 @@ prompt_cloudflare_credentials() {
     auth_mode \
     "Cloudflare 认证方式 [1] API Token (推荐) [2] Global API Key: " \
     "token" \
-    "认证方式无效，请重试" \
+    "认证方式无效" \
     "1" "token" \
     "2" "key"
 
@@ -991,7 +991,7 @@ prompt_existing_cert_domain() {
   raw_list="$(fetch_cert_list_raw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
-    log "无证书记录"
+    log "未检测到证书记录"
     return 1
   fi
 
@@ -1076,7 +1076,7 @@ prompt_output_dir_with_default() {
   local target_var="$1"
   local default_dir="$2"
   local value
-  read_prompt_value value "安装目录 (默认: $default_dir): "
+  read_prompt_value value "部署目录 (默认: $default_dir): "
   printf -v "$target_var" '%s' "${value:-$default_dir}"
 }
 
@@ -1157,7 +1157,7 @@ print_cert_list() {
     parsed_rows="$(parse_cert_list_rows "$raw_list")"
   fi
   if [[ -z "$parsed_rows" ]]; then
-    log "无证书记录"
+    log "未检测到证书记录"
     return 0
   fi
 
@@ -1207,7 +1207,7 @@ create_cert() {
   CF_Key=""
   CF_Email=""
   CF_Token=""
-  DOMAIN="$(prompt_domain_value "输入域名 (示例: example.com): ")"
+  DOMAIN="$(prompt_domain_value "请输入域名 (示例: example.com): ")"
 
   if cert_domain_exists "$DOMAIN"; then
     err "证书已存在: $DOMAIN"
@@ -1229,12 +1229,12 @@ create_cert() {
   fi
   install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"
 
-  log "创建完成: $DOMAIN -> $OUTPUT_DIR"
+  log "证书签发完成: $DOMAIN -> $OUTPUT_DIR"
 }
 
 update_cert() {
   local target_domain cert_variant cert_dir
-  resolve_existing_cert_target target_domain cert_variant "输入需更新安装目录的域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "请输入需更新证书路径的域名: " || return 1
   cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   if [[ "$cert_dir" == "-" ]]; then
     cert_dir="/etc/ssl/$target_domain"
@@ -1242,14 +1242,14 @@ update_cert() {
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
-  log "更新完成: $target_domain -> $cert_dir"
+  log "证书部署路径更新完成: $target_domain -> $cert_dir"
 }
 
 delete_cert() {
   local target_domain cert_variant acme_dir
   local -a remove_args=()
 
-  resolve_existing_cert_target target_domain cert_variant "输入待删除证书域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "请输入待删除证书域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
@@ -1260,7 +1260,7 @@ delete_cert() {
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   remove_dir_recursively_if_exists "$acme_dir"
 
-  log "删除完成: $target_domain"
+  log "证书删除完成: $target_domain"
 }
 
 update_script() {
@@ -1287,12 +1287,12 @@ update_script() {
   fi
 
   if ! curl_script_raw_retry --connect-timeout "$SCRIPT_UPDATE_CONNECT_TIMEOUT" --max-time "$SCRIPT_UPDATE_MAX_TIME" -o "$tmp_file"; then
-    remove_file_and_error "$tmp_file" "更新下载失败"
+    remove_file_and_error "$tmp_file" "升级下载失败"
     return 1
   fi
 
   if ! bash -n "$tmp_file"; then
-    remove_file_and_error "$tmp_file" "更新脚本语法校验失败"
+    remove_file_and_error "$tmp_file" "升级脚本语法检查失败"
     return 1
   fi
 
@@ -1305,18 +1305,18 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    log "当前已是最新版本"
+    log "已是最新版本"
     return 0
   fi
 
   chmod 755 "$tmp_file"
   if ! mv "$tmp_file" "$script_path"; then
-    remove_file_and_error "$tmp_file" "更新写入失败: $script_path"
+    remove_file_and_error "$tmp_file" "升级写入失败: $script_path"
     return 1
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "更新完成: $SCRIPT_VERSION -> $new_version，正在重启"
+  log "脚本升级完成: $SCRIPT_VERSION -> $new_version，准备重启"
   release_lock
   exec bash "$script_path"
   die "脚本重启失败: $script_path"
@@ -1326,41 +1326,41 @@ uninstall_script() {
   local confirmed remove_acme_home
   local script_path
 
-  prompt_yes_no_with_default confirmed "确认卸载 acme.sh 并删除本脚本? [y/N]: " "0"
+  prompt_yes_no_with_default confirmed "确认卸载 acme.sh 并删除当前脚本? [y/N]: " "0"
   if [[ "$confirmed" != "1" ]]; then
-    log "操作已取消"
+    log "操作取消"
     return 0
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 acme.sh: $ACME_SH"
   elif ! "$ACME_SH" --uninstall; then
-    warn "acme.sh 卸载失败，请手动处理"
+    warn "acme.sh 卸载失败，需手动处理"
   fi
 
-  prompt_yes_no_with_default remove_acme_home "是否删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
+  prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
   if [[ "$remove_acme_home" == "1" ]]; then
     remove_dir_recursively_if_exists "$ACME_HOME"
     log "目录已删除: $ACME_HOME"
   fi
 
   script_path="$(resolve_script_path)" || {
-    err "卸载完成，但无法解析脚本路径，请手动删除脚本文件"
+    err "卸载完成，未解析到脚本路径，需手动删除"
     return 1
   }
 
   if [[ -f "$script_path" ]]; then
     if [[ ! -w "$script_path" ]]; then
-      err "卸载完成，但脚本文件不可写，请手动删除: $script_path"
+      err "卸载完成，脚本不可写，需手动删除: $script_path"
       return 1
     fi
     if ! rm -f "$script_path"; then
-      err "卸载完成，但删除脚本失败: $script_path"
+      err "卸载完成，删除脚本失败: $script_path"
       return 1
     fi
     log "卸载完成: 已删除脚本 $script_path"
   else
-    log "卸载完成: 脚本文件不存在 $script_path"
+    log "卸载完成: 未找到脚本文件 $script_path"
   fi
 
   release_lock
@@ -1371,7 +1371,7 @@ print_main_menu() {
   local i label
 
   printf '\n'
-  printf '%s=== ACME 证书管理器 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
+  printf '%s=== ACME 证书运维 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((i = 1; i < ${#MENU_LABELS[@]}; i++)); do
@@ -1386,7 +1386,7 @@ print_main_menu() {
 
 print_usage() {
   cat <<USAGE
-Cloudflare DNS ACME 证书管理工具
+Cloudflare DNS ACME 运维脚本
 USAGE
 }
 
