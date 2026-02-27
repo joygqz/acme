@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.3"
+readonly SCRIPT_VERSION="v1.0.4"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -1103,7 +1103,7 @@ prompt_dns_provider() {
 }
 
 prompt_dns_api_env_vars() {
-  local input_env_vars provider_env_keys="" provider_env_keys_inline="" prompt
+  local input_env_vars provider_env_keys="" provider_env_keys_inline="" prompt use_cached_dns_env_vars="1"
   if provider_env_keys="$(list_dns_provider_env_keys "$DNS_PROVIDER")"; then
     provider_env_keys_inline="${provider_env_keys//$'\n'/, }"
     provider_env_keys_inline="${provider_env_keys_inline%, }"
@@ -1112,14 +1112,24 @@ prompt_dns_api_env_vars() {
     fi
   fi
 
+  if [[ -n "$DNS_API_ENV_VARS" && -z "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+    prompt_yes_no_with_default \
+      use_cached_dns_env_vars \
+      "检测到 $DNS_PROVIDER 缓存, 是否直接使用 [Y/n]: " \
+      "1"
+    if [[ "$use_cached_dns_env_vars" == "1" ]]; then
+      return
+    fi
+  fi
+
   prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔): "
-  if [[ -n "$DNS_API_ENV_VARS" ]]; then
-    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 留空沿用 $DNS_PROVIDER 缓存): "
+  if [[ -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
   fi
 
   while true; do
     read_prompt_value input_env_vars "$prompt"
-    if [[ -z "$input_env_vars" && -n "$DNS_API_ENV_VARS" ]]; then
+    if [[ -z "$input_env_vars" && -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
       return
     fi
     if validate_dns_api_env_vars "$input_env_vars"; then
