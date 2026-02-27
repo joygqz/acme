@@ -1574,10 +1574,15 @@ uninstall_script() {
 }
 
 print_main_menu() {
-  local menu_idx label
+  local menu_idx label title_color="" color_reset=""
+
+  if [[ -t 1 ]]; then
+    title_color=$'\033[94m'
+    color_reset=$'\033[0m'
+  fi
 
   printf '\n'
-  printf '=== ACME 证书运维 %s ===\n' "$SCRIPT_VERSION"
+  printf '%s=== ACME 证书运维 %s ===%s\n' "$title_color" "$SCRIPT_VERSION" "$color_reset"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
@@ -1585,7 +1590,7 @@ print_main_menu() {
     if [[ "${MENU_HANDLERS[$menu_idx]}" == "$MENU_UPDATE_SCRIPT_HANDLER" && -n "$UPDATE_AVAILABLE_VERSION" ]]; then
       label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
     fi
-    printf ' %d. %s\n' "$menu_idx" "$label"
+    printf ' %s%d.%s %s\n' "$title_color" "$menu_idx" "$color_reset" "$label"
   done
   printf '\n'
 }
