@@ -283,10 +283,23 @@ remove_empty_dir_quietly() {
   rmdir "$dir_path" >/dev/null 2>&1 || true
 }
 
+is_unsafe_delete_target() {
+  local dir_path="$1"
+  case "$dir_path" in
+    ""|"/"|"."|"..")
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 remove_dir_recursively_if_exists() {
   local dir_path="$1"
+  if is_unsafe_delete_target "$dir_path"; then
+    return 1
+  fi
   [[ -d "$dir_path" ]] || return 0
-  rm -rf "$dir_path"
+  rm -rf -- "$dir_path"
 }
 
 remove_file_and_error() {
