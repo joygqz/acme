@@ -24,6 +24,7 @@ readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_
 readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新安装目录" "删除证书" "更新脚本" "卸载并删除脚本" )
 
 DOMAIN="${DOMAIN:-}"
+EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 CF_Key="${CF_Key:-}"
 CF_Email="${CF_Email:-}"
@@ -410,16 +411,6 @@ read_prompt_value() {
   printf -v "$target_var" '%s' "$input_value"
 }
 
-read_prompt_with_default() {
-  local target_var="$1"
-  local prompt="$2"
-  local default_value="$3"
-  local value
-
-  read_prompt_value value "$prompt"
-  printf -v "$target_var" '%s' "${value:-$default_value}"
-}
-
 ensure_non_empty_input() {
   local target_var="$1"
   local prompt="$2"
@@ -583,7 +574,7 @@ install_deps() {
 install_acme_sh() {
   if [[ ! -x "$ACME_SH" ]]; then
     curl_https --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" --connect-timeout "$INSTALL_CONNECT_TIMEOUT" "$ACME_INSTALL_URL" \
-      | sh -s --home "$ACME_HOME" --no-profile
+      | sh -s "email=$EMAIL" --home "$ACME_HOME" --no-profile
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
@@ -624,6 +615,18 @@ ensure_default_ca() {
   fi
 
   "$ACME_SH" --set-default-ca --server "$DEFAULT_CA_SERVER"
+}
+
+prompt_install_email_if_needed() {
+  if [[ -x "$ACME_SH" ]]; then
+    return
+  fi
+
+  if [[ -z "$EMAIL" && -n "$CF_Email" ]]; then
+    EMAIL="$CF_Email"
+  fi
+
+  ensure_valid_email_input EMAIL "首次安装，请输入 ACME 邮箱: " "邮箱格式无效"
 }
 
 get_cert_conf_file() {
@@ -1072,7 +1075,9 @@ get_cert_install_dir() {
 prompt_output_dir_with_default() {
   local target_var="$1"
   local default_dir="$2"
-  read_prompt_with_default "$target_var" "安装目录 (默认: $default_dir): " "$default_dir"
+  local value
+  read_prompt_value value "安装目录 (默认: $default_dir): "
+  printf -v "$target_var" '%s' "${value:-$default_dir}"
 }
 
 prompt_domain_value() {
@@ -1431,6 +1436,7 @@ main() {
   init_colors
   detect_os
   install_deps
+  prompt_install_email_if_needed
   install_acme_sh
   check_script_update
   run_menu
