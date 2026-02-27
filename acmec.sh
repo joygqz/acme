@@ -1317,7 +1317,7 @@ prompt_cloudflare_credentials() {
   fi
 
   if [[ "$has_cached_credentials" == "1" ]]; then
-    prompt_yes_no_with_default refresh_credentials "检测到 Cloudflare 凭据缓存，是否更新 [y/N]: " "0"
+    prompt_yes_no_with_default refresh_credentials "检测到 Cloudflare 凭据缓存，是否重新输入 [y/N]: " "0"
     if [[ "$refresh_credentials" != "1" ]]; then
       CF_AUTH_MODE="$auth_mode"
       return
