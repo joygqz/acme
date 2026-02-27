@@ -1243,6 +1243,17 @@ list_dns_providers() {
   printf '%s' "$providers" | sed 's/\.sh$//' | sort -u
 }
 
+list_dns_provider_env_keys() {
+  local provider="${1:-$DNS_PROVIDER}"
+  local provider_file="$ACME_HOME/dnsapi/${provider}.sh"
+
+  [[ -f "$provider_file" ]] || return 1
+  grep -Eo '_readaccountconf(_mutable)?[[:space:]]+["'"'"']?[A-Za-z_][A-Za-z0-9_]*["'"'"']?' "$provider_file" \
+    | sed -E 's/^_readaccountconf(_mutable)?[[:space:]]+//' \
+    | tr -d "\"'" \
+    | sort -u
+}
+
 print_dns_providers_table() {
   local providers="$1"
   local columns="${2:-$DNS_PROVIDER_TABLE_COLUMNS}"
@@ -1301,7 +1312,7 @@ prompt_dns_provider() {
   fi
 
   while true; do
-    read_prompt_value provider_input "DNS Provider (默认: $current_provider, 文档: $DNS_API_DOC_URL): "
+    read_prompt_value provider_input "DNS Provider (默认: $current_provider): "
     provider_input="${provider_input:-$current_provider}"
 
     if [[ ! "$provider_input" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
@@ -1318,7 +1329,7 @@ prompt_dns_provider() {
 }
 
 prompt_dns_api_env_vars() {
-  local refresh_credentials input_env_vars
+  local refresh_credentials input_env_vars provider_env_keys provider_env_keys_inline
 
   if [[ -n "$DNS_API_ENV_VARS" ]]; then
     prompt_yes_no_with_default refresh_credentials "检测到 DNS 凭据缓存, 是否重新输入 [y/N]: " "0"
@@ -1327,13 +1338,27 @@ prompt_dns_api_env_vars() {
     fi
   fi
 
+  provider_env_keys=""
+  provider_env_keys_inline=""
+  if provider_env_keys="$(list_dns_provider_env_keys "$DNS_PROVIDER")"; then
+    provider_env_keys_inline="${provider_env_keys//$'\n'/, }"
+    provider_env_keys_inline="${provider_env_keys_inline%, }"
+    if [[ -n "$provider_env_keys_inline" ]]; then
+      log "当前 Provider Key: $provider_env_keys_inline"
+    fi
+  fi
+
   while true; do
-    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
+    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔): "
     if validate_dns_api_env_vars "$input_env_vars"; then
       DNS_API_ENV_VARS="$input_env_vars"
       return
     fi
-    err "环境变量格式无效, 示例: CF_Token=xxx, 文档: $DNS_API_DOC_URL"
+    if [[ -n "$provider_env_keys_inline" ]]; then
+      err "环境变量格式无效, 需使用 KEY=VALUE, 可选 Key: $provider_env_keys_inline"
+    else
+      err "环境变量格式无效, 示例: CF_Token=xxx, 文档: $DNS_API_DOC_URL"
+    fi
   done
 }
 
