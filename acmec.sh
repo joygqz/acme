@@ -1378,13 +1378,13 @@ print_cert_list() {
     return 0
   fi
 
-  border="+---------------------------+---------+---------------------------+----------------------+----------------------+----------------------+----------------------------+"
+  border="+---------------------------+-----------+---------------------------+----------------------+----------------------+----------------------+----------------------------+"
   printf '\n'
   printf "%s\n" "证书清单"
   printf '\n'
   printf '%s\n' "$border"
-  printf "| %-25s | %-7s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
-    "Domain" "Key" "SAN" "CA" "Created" "Renew" "Install Dir"
+  printf "| %-25s | %-9s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
+    "Main_Domain" "KeyLength" "SAN_Domains" "CA" "Created" "Renew" "Install_Dir"
   printf '%s\n' "$border"
 
   while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
@@ -1392,14 +1392,14 @@ print_cert_list() {
     install_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
 
     main_domain_fmt="$(truncate_text "$main_domain" 25)"
-    key_length_fmt="$(truncate_text "$key_length" 7)"
+    key_length_fmt="$(truncate_text "$key_length" 9)"
     san_domains_fmt="$(truncate_text "$san_domains" 25)"
     ca_fmt="$(truncate_text "$ca" 20)"
     created_fmt="$(truncate_text "$created" 20)"
     renew_fmt="$(truncate_text "$renew" 20)"
     install_dir_fmt="$(truncate_text "$install_dir" 26)"
 
-    printf "| %-25s | %-7s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
+    printf "| %-25s | %-9s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
       "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
