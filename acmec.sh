@@ -5,7 +5,7 @@ umask 077
 
 readonly DEFAULT_KEY_TYPE="ec-256"
 readonly DEFAULT_CA_SERVER="letsencrypt"
-readonly DNS_PROVIDER="dns_cf"
+readonly DEFAULT_DNS_PROVIDER="dns_cf"
 readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
@@ -16,7 +16,7 @@ readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
 readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
-readonly CACHE_SCHEMA_VERSION="1"
+readonly CACHE_SCHEMA_VERSION="2"
 readonly CACHE_WRAPPER_VERSION_KEY="CACHE_WRAPPER_VERSION"
 readonly UPDATE_CACHE_TTL_SECONDS="21600"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
@@ -33,28 +33,24 @@ readonly MENU_UPDATE_SCRIPT_HANDLER="update_script"
 readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
 readonly ENV_HAS_EMAIL="${EMAIL+1}"
-readonly ENV_HAS_CF_KEY="${CF_Key+1}"
-readonly ENV_HAS_CF_EMAIL="${CF_Email+1}"
-readonly ENV_HAS_CF_TOKEN="${CF_Token+1}"
 readonly ENV_HAS_ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE+1}"
 readonly ENV_HAS_ISSUE_CA_SERVER="${ISSUE_CA_SERVER+1}"
 readonly ENV_HAS_ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD+1}"
 readonly ENV_HAS_ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW+1}"
-readonly ENV_HAS_CF_AUTH_MODE="${CF_AUTH_MODE+1}"
+readonly ENV_HAS_DNS_PROVIDER="${DNS_PROVIDER+1}"
+readonly ENV_HAS_DNS_API_ENV_VARS="${DNS_API_ENV_VARS+1}"
 readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
 readonly ENV_HAS_CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS+1}"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
-CF_Key="${CF_Key:-}"
-CF_Email="${CF_Email:-}"
-CF_Token="${CF_Token:-}"
 ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE:-$DEFAULT_KEY_TYPE}"
 ISSUE_CA_SERVER="${ISSUE_CA_SERVER:-$DEFAULT_CA_SERVER}"
 ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD:-0}"
 ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW:-0}"
-CF_AUTH_MODE="${CF_AUTH_MODE:-token}"
+DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
+DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
 CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS:-1}"
 UPDATE_CACHE_LAST_CHECK_TS=""
@@ -71,6 +67,7 @@ LOCK_FD=""
 DIR_LOCK_DIR=""
 DIR_LOCK_PID_FILE=""
 UPDATE_AVAILABLE_VERSION=""
+DNS_API_ENV_LAST_KEYS=""
 
 curl_https() {
   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
@@ -423,7 +420,7 @@ load_cached_preferences() {
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_CA_SERVER" "ISSUE_CA_SERVER" "$ENV_HAS_ISSUE_CA_SERVER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_INCLUDE_WILDCARD" "ISSUE_INCLUDE_WILDCARD" "$ENV_HAS_ISSUE_INCLUDE_WILDCARD"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_FORCE_RENEW" "ISSUE_FORCE_RENEW" "$ENV_HAS_ISSUE_FORCE_RENEW"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "CF_AUTH_MODE" "CF_AUTH_MODE" "$ENV_HAS_CF_AUTH_MODE"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "DNS_PROVIDER" "DNS_PROVIDER" "$ENV_HAS_DNS_PROVIDER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "CACHE_PERSIST_CREDENTIALS" "CACHE_PERSIST_CREDENTIALS" "$ENV_HAS_CACHE_PERSIST_CREDENTIALS"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_LAST_CHECK_TS" "UPDATE_CACHE_LAST_CHECK_TS"
@@ -432,9 +429,7 @@ load_cached_preferences() {
 }
 
 load_cached_secrets() {
-  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Token" "CF_Token" "$ENV_HAS_CF_TOKEN"
-  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Key" "CF_Key" "$ENV_HAS_CF_KEY"
-  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Email" "CF_Email" "$ENV_HAS_CF_EMAIL"
+  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "DNS_API_ENV_VARS" "DNS_API_ENV_VARS" "$ENV_HAS_DNS_API_ENV_VARS"
 }
 
 reset_persistent_cache_files() {
@@ -466,15 +461,22 @@ ensure_cache_schema_compatible() {
 normalize_cached_settings() {
   normalize_issue_options
 
-  case "$CF_AUTH_MODE" in
-    token|key) ;;
-    *) CF_AUTH_MODE="token" ;;
+  case "$DNS_PROVIDER" in
+    dns_[A-Za-z0-9_]*)
+      ;;
+    *)
+      DNS_PROVIDER="$DEFAULT_DNS_PROVIDER"
+      ;;
   esac
 
   case "$CACHE_PERSIST_CREDENTIALS" in
     0|1) ;;
     *) CACHE_PERSIST_CREDENTIALS="1" ;;
   esac
+
+  if [[ -n "$DNS_API_ENV_VARS" ]] && ! validate_dns_api_env_vars "$DNS_API_ENV_VARS"; then
+    DNS_API_ENV_VARS=""
+  fi
 
   [[ -n "$DEPLOY_BASE_DIR" ]] || DEPLOY_BASE_DIR="/etc/ssl"
 
@@ -493,9 +495,7 @@ load_persistent_cache() {
   if [[ "$CACHE_PERSIST_CREDENTIALS" == "1" ]]; then
     load_cached_secrets
   else
-    CF_Token=""
-    CF_Key=""
-    CF_Email=""
+    DNS_API_ENV_VARS=""
   fi
 
   normalize_cached_settings
@@ -510,7 +510,7 @@ save_cached_preferences() {
     "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
     "ISSUE_INCLUDE_WILDCARD" "$ISSUE_INCLUDE_WILDCARD" \
     "ISSUE_FORCE_RENEW" "$ISSUE_FORCE_RENEW" \
-    "CF_AUTH_MODE" "$CF_AUTH_MODE" \
+    "DNS_PROVIDER" "$DNS_PROVIDER" \
     "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR" \
     "CACHE_PERSIST_CREDENTIALS" "$CACHE_PERSIST_CREDENTIALS" \
     "UPDATE_CACHE_LAST_CHECK_TS" "$UPDATE_CACHE_LAST_CHECK_TS" \
@@ -525,9 +525,7 @@ save_cached_secrets() {
   fi
 
   write_cache_entries "$CACHE_SECRETS_FILE" \
-    "CF_Token" "${CF_Token:-}" \
-    "CF_Key" "${CF_Key:-}" \
-    "CF_Email" "${CF_Email:-}"
+    "DNS_API_ENV_VARS" "${DNS_API_ENV_VARS:-}"
 }
 
 save_persistent_cache() {
@@ -966,10 +964,6 @@ prompt_install_email_if_needed() {
     return
   fi
 
-  if [[ -z "$EMAIL" && -n "$CF_Email" ]]; then
-    EMAIL="$CF_Email"
-  fi
-
   ensure_valid_email_input EMAIL "首次部署请输入 ACME 邮箱: " "邮箱格式无效"
 }
 
@@ -1248,102 +1242,93 @@ issue_cert() {
   "$ACME_SH" "${issue_args[@]}"
 }
 
-prompt_cf_token_credentials() {
-  ensure_non_empty_input CF_Token "请输入 Cloudflare API Token (CF_Token): " "CF_Token 不能为空" "1"
-
-  CF_Key=""
-  CF_Email=""
+dns_provider_exists() {
+  local provider="$1"
+  local dnsapi_dir="$ACME_HOME/dnsapi"
+  [[ -f "$dnsapi_dir/${provider}.sh" ]]
 }
 
-prompt_cf_global_key_credentials() {
-  ensure_valid_email_input CF_Email "请输入 Cloudflare 邮箱 (CF_Email): " "CF_Email 格式无效"
-  ensure_non_empty_input CF_Key "请输入 Cloudflare Global API Key (CF_Key): " "CF_Key 不能为空" "1"
+validate_dns_api_env_vars() {
+  local env_vars="$1"
+  local env_pair env_key env_value
 
-  CF_Token=""
+  [[ -n "$env_vars" ]] || return 1
+  for env_pair in $env_vars; do
+    [[ "$env_pair" == *=* ]] || return 1
+    env_key="${env_pair%%=*}"
+    env_value="${env_pair#*=}"
+    [[ -n "$env_key" && -n "$env_value" ]] || return 1
+    [[ "$env_key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  done
 }
 
-prompt_cloudflare_credentials_by_mode() {
-  local auth_mode="$1"
-  local force_refresh="${2:-0}"
-  CF_AUTH_MODE="$auth_mode"
-  if [[ "$auth_mode" == "token" ]]; then
-    if [[ "$force_refresh" == "1" ]]; then
-      CF_Token=""
+prompt_dns_provider() {
+  local provider_input current_provider
+  current_provider="$DNS_PROVIDER"
+  while true; do
+    read_prompt_value provider_input "DNS API 提供方 (默认: $current_provider): "
+    provider_input="${provider_input:-$current_provider}"
+
+    if [[ ! "$provider_input" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
+      err "DNS API 格式无效: $provider_input"
+      continue
     fi
-    prompt_cf_token_credentials
+    if [[ -d "$ACME_HOME/dnsapi" ]] && ! dns_provider_exists "$provider_input"; then
+      err "未找到 DNS API: $provider_input"
+      continue
+    fi
+    DNS_PROVIDER="$provider_input"
     return
-  fi
-  if [[ "$force_refresh" == "1" ]]; then
-    CF_Key=""
-    CF_Email=""
-  fi
-  prompt_cf_global_key_credentials
+  done
 }
 
-prompt_cloudflare_auth_mode_with_default() {
-  local target_var="$1"
-  local default_mode="$2"
-  prompt_option_with_default \
-    "$target_var" \
-    "Cloudflare 认证方式 [1] API Token [2] Global API Key (默认: $default_mode): " \
-    "$default_mode" \
-    "认证方式无效" \
-    "1" "token" \
-    "2" "key"
-}
+prompt_dns_api_env_vars() {
+  local refresh_credentials input_env_vars
 
-prompt_cloudflare_credentials() {
-  local auth_mode="$CF_AUTH_MODE"
-  local has_cached_credentials="0"
-  local refresh_credentials
-
-  case "$auth_mode" in
-    token|key) ;;
-    *)
-      if [[ -n "$CF_Token" ]]; then
-        auth_mode="token"
-      elif [[ -n "$CF_Key" || -n "$CF_Email" ]]; then
-        auth_mode="key"
-      else
-        auth_mode="token"
-      fi
-      ;;
-  esac
-
-  if [[ "$auth_mode" == "token" && -n "$CF_Token" ]]; then
-    has_cached_credentials="1"
-  elif [[ "$auth_mode" == "key" && -n "$CF_Key" && -n "$CF_Email" ]]; then
-    has_cached_credentials="1"
-  fi
-
-  if [[ "$has_cached_credentials" == "1" ]]; then
-    prompt_yes_no_with_default refresh_credentials "检测到 Cloudflare 凭据缓存，是否重新输入 [y/N]: " "0"
+  if [[ -n "$DNS_API_ENV_VARS" ]]; then
+    prompt_yes_no_with_default refresh_credentials "检测到 DNS 凭据缓存，是否重新输入 [y/N]: " "0"
     if [[ "$refresh_credentials" != "1" ]]; then
-      CF_AUTH_MODE="$auth_mode"
       return
     fi
-    prompt_cloudflare_auth_mode_with_default auth_mode "$auth_mode"
-    prompt_cloudflare_credentials_by_mode "$auth_mode" "1"
-    return
   fi
 
-  prompt_cloudflare_auth_mode_with_default auth_mode "$auth_mode"
-  prompt_cloudflare_credentials_by_mode "$auth_mode" "0"
+  while true; do
+    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE，空格分隔): "
+    if validate_dns_api_env_vars "$input_env_vars"; then
+      DNS_API_ENV_VARS="$input_env_vars"
+      return
+    fi
+    err "环境变量格式无效，示例: CF_Token=xxx 或 DP_Id=id DP_Key=key"
+  done
 }
 
-apply_cloudflare_credentials_env() {
-  CF_Token="${CF_Token:-}"
-  CF_Key="${CF_Key:-}"
-  CF_Email="${CF_Email:-}"
-
-  if [[ -n "$CF_Token" ]]; then
-    CF_Key=""
-    CF_Email=""
-  else
-    CF_Token=""
+prompt_dns_credentials() {
+  local previous_provider="$DNS_PROVIDER"
+  prompt_dns_provider
+  if [[ "$DNS_PROVIDER" != "$previous_provider" ]]; then
+    DNS_API_ENV_VARS=""
   fi
+  prompt_dns_api_env_vars
+}
 
-  export CF_Token CF_Key CF_Email
+clear_applied_dns_api_env() {
+  local env_key
+  for env_key in $DNS_API_ENV_LAST_KEYS; do
+    export "$env_key="
+  done
+  DNS_API_ENV_LAST_KEYS=""
+}
+
+apply_dns_credentials_env() {
+  local env_pair env_key env_value
+
+  clear_applied_dns_api_env
+  for env_pair in $DNS_API_ENV_VARS; do
+    env_key="${env_pair%%=*}"
+    env_value="${env_pair#*=}"
+    export "$env_key=$env_value"
+    DNS_API_ENV_LAST_KEYS+="${env_key} "
+  done
 }
 
 install_cert_to_dir() {
@@ -1604,14 +1589,14 @@ create_cert() {
     return 1
   fi
 
-  prompt_cloudflare_credentials
+  prompt_dns_credentials
   prompt_issue_options
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
   default_output_dir="$(default_output_dir_for_domain "$DOMAIN")"
   prompt_output_dir_with_default OUTPUT_DIR "$default_output_dir"
-  apply_cloudflare_credentials_env
+  apply_dns_credentials_env
   if ! issue_cert; then
     cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
     remove_dir_recursively_if_exists "$cert_dir"
@@ -1779,7 +1764,7 @@ print_main_menu() {
 
 print_usage() {
   cat <<USAGE
-Cloudflare DNS ACME 运维脚本
+DNS API ACME 运维脚本
 USAGE
 }
 

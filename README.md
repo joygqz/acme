@@ -1,6 +1,6 @@
 # ACME CertOps
 
-Cloudflare DNS ACME 运维脚本
+ACME DNS API 运维脚本（支持 acme.sh 官方 DNS API）
 
 ## 快速开始
 
