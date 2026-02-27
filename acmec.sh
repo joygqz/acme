@@ -9,7 +9,7 @@ readonly DEFAULT_DNS_PROVIDER="dns_cf"
 readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
-readonly DNS_API_DOC_URL="https://github.com/acmesh-official/acme.sh/wiki/dnsapi"
+readonly DNS_API_DOC_URL="https://go-acme.github.io/lego/dns/"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
 readonly SCRIPT_VERSION="v1.0.0"
@@ -754,28 +754,6 @@ read_prompt_value() {
   printf -v "$target_var" '%s' "$input_value"
 }
 
-ensure_non_empty_input() {
-  local target_var="$1"
-  local prompt="$2"
-  local empty_msg="$3"
-  local hidden="${4:-0}"
-  local value="${!target_var:-}"
-
-  while true; do
-    if [[ -z "$value" ]]; then
-      read_prompt_value value "$prompt" "$hidden"
-    fi
-
-    if [[ -n "$value" ]]; then
-      printf -v "$target_var" '%s' "$value"
-      return
-    fi
-
-    err "$empty_msg"
-    value=""
-  done
-}
-
 ensure_valid_email_input() {
   local target_var="$1"
   local prompt="$2"
@@ -1252,9 +1230,12 @@ dns_provider_exists() {
 validate_dns_api_env_vars() {
   local env_vars="$1"
   local env_pair env_key env_value
+  local -a env_pairs=()
 
   [[ -n "$env_vars" ]] || return 1
-  for env_pair in $env_vars; do
+  read -r -a env_pairs <<< "$env_vars"
+  ((${#env_pairs[@]} > 0)) || return 1
+  for env_pair in "${env_pairs[@]}"; do
     [[ "$env_pair" == *=* ]] || return 1
     env_key="${env_pair%%=*}"
     env_value="${env_pair#*=}"
@@ -1267,15 +1248,15 @@ prompt_dns_provider() {
   local provider_input current_provider
   current_provider="$DNS_PROVIDER"
   while true; do
-    read_prompt_value provider_input "DNS API 提供方 (默认: $current_provider): "
+    read_prompt_value provider_input "DNS Providers (默认: $current_provider, 文档: $DNS_API_DOC_URL): "
     provider_input="${provider_input:-$current_provider}"
 
     if [[ ! "$provider_input" =~ ^dns_[A-Za-z0-9_]+$ ]]; then
-      err "DNS API 格式无效: $provider_input"
+      err "DNS Provider 格式无效: $provider_input"
       continue
     fi
     if [[ -d "$ACME_HOME/dnsapi" ]] && ! dns_provider_exists "$provider_input"; then
-      err "未找到 DNS API: $provider_input"
+      err "未找到 DNS Provider: $provider_input"
       continue
     fi
     DNS_PROVIDER="$provider_input"
@@ -1314,7 +1295,13 @@ prompt_dns_credentials() {
 
 clear_applied_dns_api_env() {
   local env_key
-  for env_key in $DNS_API_ENV_LAST_KEYS; do
+  local -a env_keys=()
+  read -r -a env_keys <<< "${DNS_API_ENV_LAST_KEYS:-}"
+  ((${#env_keys[@]} > 0)) || {
+    DNS_API_ENV_LAST_KEYS=""
+    return 0
+  }
+  for env_key in "${env_keys[@]}"; do
     export "$env_key="
   done
   DNS_API_ENV_LAST_KEYS=""
@@ -1322,9 +1309,12 @@ clear_applied_dns_api_env() {
 
 apply_dns_credentials_env() {
   local env_pair env_key env_value
+  local -a env_pairs=()
 
   clear_applied_dns_api_env
-  for env_pair in $DNS_API_ENV_VARS; do
+  read -r -a env_pairs <<< "${DNS_API_ENV_VARS:-}"
+  ((${#env_pairs[@]} > 0)) || return 0
+  for env_pair in "${env_pairs[@]}"; do
     env_key="${env_pair%%=*}"
     env_value="${env_pair#*=}"
     export "$env_key=$env_value"
