@@ -14,6 +14,13 @@ readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
 readonly SCRIPT_VERSION="v1.0.0"
 readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
+readonly CURL_RETRY_COUNT="3"
+readonly CURL_RETRY_DELAY="1"
+readonly SCRIPT_CHECK_CONNECT_TIMEOUT="5"
+readonly SCRIPT_CHECK_MAX_TIME="15"
+readonly SCRIPT_UPDATE_CONNECT_TIMEOUT="10"
+readonly SCRIPT_UPDATE_MAX_TIME="25"
+readonly INSTALL_CONNECT_TIMEOUT="10"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -45,6 +52,10 @@ curl_script_raw() {
   curl_https "$@" "$SCRIPT_RAW_URL"
 }
 
+curl_script_raw_retry() {
+  curl_script_raw --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" "$@"
+}
+
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
   local source_dir=""
@@ -61,6 +72,20 @@ resolve_script_path() {
   fi
 
   printf '%s\n' "$source_path"
+}
+
+ensure_file_exists_and_writable() {
+  local file_path="$1"
+
+  if [[ ! -f "$file_path" ]]; then
+    err "脚本文件不存在: $file_path"
+    return 1
+  fi
+
+  if [[ ! -w "$file_path" ]]; then
+    err "脚本文件不可写: $file_path"
+    return 1
+  fi
 }
 
 extract_script_version() {
@@ -159,7 +184,7 @@ is_prerelease_newer() {
 fetch_remote_script_version() {
   local remote_version=""
 
-  if ! remote_version="$(curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 5 --max-time 15 2>/dev/null | extract_script_version)"; then
+  if ! remote_version="$(curl_script_raw_retry --connect-timeout "$SCRIPT_CHECK_CONNECT_TIMEOUT" --max-time "$SCRIPT_CHECK_MAX_TIME" 2>/dev/null | extract_script_version)"; then
     return 1
   fi
 
@@ -581,7 +606,7 @@ install_deps() {
 
 install_acme_sh() {
   if [[ ! -x "$ACME_SH" ]]; then
-    curl_https --retry 3 --retry-delay 1 --connect-timeout 10 "$ACME_INSTALL_URL" \
+    curl_https --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" --connect-timeout "$INSTALL_CONNECT_TIMEOUT" "$ACME_INSTALL_URL" \
       | sh -s "email=$EMAIL" --home "$ACME_HOME" --no-profile
   fi
 
@@ -975,6 +1000,17 @@ prompt_cloudflare_credentials() {
   prompt_cf_global_key_credentials
 }
 
+apply_cloudflare_credentials_env() {
+  if [[ -n "$CF_Token" ]]; then
+    export CF_Token
+    unset CF_Key CF_Email
+    return
+  fi
+
+  export CF_Key CF_Email
+  unset CF_Token
+}
+
 install_cert_to_dir() {
   local cert_domain="$1"
   local cert_dir="$2"
@@ -1003,6 +1039,10 @@ install_cert_to_dir() {
   chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
 }
 
+fetch_cert_list_raw() {
+  "$ACME_SH" --list --listraw
+}
+
 prompt_existing_cert_domain() {
   local target_var="$1"
   local prompt="$2"
@@ -1010,7 +1050,7 @@ prompt_existing_cert_domain() {
   local parsed_rows=""
   local selected_domain=""
 
-  raw_list="$("$ACME_SH" --list --listraw)" || return 1
+  raw_list="$(fetch_cert_list_raw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
     log "暂无证书"
@@ -1102,6 +1142,15 @@ prompt_inputs() {
   read -r -p "$email_prompt" answer
   EMAIL="${answer:-$EMAIL}"
   ensure_valid_email_input EMAIL "请输入 ACME 账号邮箱 (例如: admin@example.com): " "邮箱格式错误"
+}
+
+prompt_output_dir_with_default() {
+  local target_var="$1"
+  local default_dir="$2"
+  local answer=""
+
+  read -r -p "输出目录 (默认: $default_dir): " answer
+  printf -v "$target_var" '%s' "${answer:-$default_dir}"
 }
 
 prompt_domain_value() {
@@ -1222,13 +1271,12 @@ print_cert_list() {
 list_certs() {
   local raw_list=""
 
-  raw_list="$("$ACME_SH" --list --listraw)" || return 1
+  raw_list="$(fetch_cert_list_raw)" || return 1
   print_cert_list "$raw_list"
 }
 
 create_cert() {
   local cert_variant=""
-  local answer=""
 
   OUTPUT_DIR=""
   CF_Key=""
@@ -1246,16 +1294,8 @@ create_cert() {
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
-  read -r -p "输出目录 (默认: /etc/ssl/$DOMAIN): " answer
-  OUTPUT_DIR="${answer:-/etc/ssl/$DOMAIN}"
-
-  if [[ -n "$CF_Token" ]]; then
-    export CF_Token
-    unset CF_Key CF_Email
-  else
-    export CF_Key CF_Email
-    unset CF_Token
-  fi
+  prompt_output_dir_with_default OUTPUT_DIR "/etc/ssl/$DOMAIN"
+  apply_cloudflare_credentials_env
   if ! issue_cert; then
     cleanup_domain_variant_dir "$DOMAIN" "$cert_variant"
     err "证书申请失败"
@@ -1271,7 +1311,6 @@ update_cert() {
   local cert_variant=""
   local cert_dir=""
   local current_install_dir=""
-  local answer=""
 
   prompt_existing_cert_domain target_domain "请输入要更换安装目录的域名: " || return 1
   select_cert_variant_for_domain "$target_domain" cert_variant || return 1
@@ -1280,8 +1319,7 @@ update_cert() {
   if [[ "$current_install_dir" != "-" ]]; then
     cert_dir="$current_install_dir"
   fi
-  read -r -p "输出目录 (默认: $cert_dir): " answer
-  cert_dir="${answer:-$cert_dir}"
+  prompt_output_dir_with_default cert_dir "$cert_dir"
 
   install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
   log "更换成功: $target_domain -> $cert_dir"
@@ -1320,13 +1358,7 @@ update_script() {
     return 1
   }
 
-  if [[ ! -f "$script_path" ]]; then
-    err "脚本文件不存在: $script_path"
-    return 1
-  fi
-
-  if [[ ! -w "$script_path" ]]; then
-    err "脚本文件不可写: $script_path"
+  if ! ensure_file_exists_and_writable "$script_path"; then
     return 1
   fi
 
@@ -1336,7 +1368,7 @@ update_script() {
     return 1
   fi
 
-  if ! curl_script_raw --retry 3 --retry-delay 1 --connect-timeout 10 --max-time 25 -o "$tmp_file"; then
+  if ! curl_script_raw_retry --connect-timeout "$SCRIPT_UPDATE_CONNECT_TIMEOUT" --max-time "$SCRIPT_UPDATE_MAX_TIME" -o "$tmp_file"; then
     remove_file_and_error "$tmp_file" "下载更新失败"
     return 1
   fi
@@ -1398,36 +1430,51 @@ print_usage() {
 USAGE
 }
 
+run_menu_action() {
+  local choice="$1"
+
+  case "$choice" in
+    1)
+      list_certs || true
+      ;;
+    2)
+      create_cert || true
+      ;;
+    3)
+      update_cert || true
+      ;;
+    4)
+      delete_cert || true
+      ;;
+    5)
+      update_script || true
+      ;;
+    0)
+      return 2
+      ;;
+    *)
+      err "无效选项: $choice"
+      return 1
+      ;;
+  esac
+}
+
 run_menu() {
   local choice=""
+  local action_status=0
 
   while true; do
     print_main_menu
 
     read -r -p "请输入选择 [0-5]: " choice
-    case "$choice" in
-      1)
-        list_certs || true
-        ;;
-      2)
-        create_cert || true
-        ;;
-      3)
-        update_cert || true
-        ;;
-      4)
-        delete_cert || true
-        ;;
-      5)
-        update_script || true
-        ;;
-      0)
-        return
-        ;;
-      *)
-        err "无效选项: $choice"
-        ;;
-    esac
+    if run_menu_action "$choice"; then
+      continue
+    fi
+
+    action_status=$?
+    if [[ "$action_status" -eq 2 ]]; then
+      return
+    fi
   done
 }
 
