@@ -9,6 +9,7 @@ readonly DEFAULT_DNS_PROVIDER="dns_cf"
 readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
+readonly DNS_API_DOC_URL="https://github.com/acmesh-official/acme.sh/wiki/dnsapi"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
 readonly SCRIPT_VERSION="v1.0.0"
@@ -445,7 +446,7 @@ ensure_cache_schema_compatible() {
 
   if [[ "$cached_schema" != "$CACHE_SCHEMA_VERSION" ]]; then
     reset_persistent_cache_files
-    warn "缓存结构变更，已重置缓存"
+    warn "缓存结构变更, 已重置缓存"
     return 0
   fi
 
@@ -455,7 +456,7 @@ ensure_cache_schema_compatible() {
   fi
 
   reset_persistent_cache_files
-  warn "脚本版本变更，已重置缓存"
+  warn "脚本版本变更, 已重置缓存"
 }
 
 normalize_cached_settings() {
@@ -833,7 +834,7 @@ has_ca_bundle() {
 
 warn_service_action_failed() {
   local action="$1"
-  warn "${CRON_SERVICE} ${action}失败，需手动处理"
+  warn "${CRON_SERVICE} ${action}失败, 需手动处理"
 }
 
 enable_non_systemd_service_autostart() {
@@ -868,7 +869,7 @@ ensure_cron_service_running() {
   fi
 
   if ! command_exists service; then
-    warn "未检测到 systemctl/service，跳过 ${CRON_SERVICE} 自动管理"
+    warn "未检测到 systemctl/service, 跳过 ${CRON_SERVICE} 自动管理"
     return
   fi
 
@@ -1063,7 +1064,7 @@ select_cert_variant_for_domain() {
 
   if [[ "$has_ecc" == "1" && "$has_rsa" == "1" ]]; then
     while true; do
-      read_prompt_value answer "检测到 ECC/RSA，请选择 [1] ECC [2] RSA: "
+      read_prompt_value answer "检测到 ECC/RSA, 请选择 [1] ECC [2] RSA: "
       case "$answer" in
         1)
           printf -v "$target_var" '%s' "ecc"
@@ -1286,19 +1287,19 @@ prompt_dns_api_env_vars() {
   local refresh_credentials input_env_vars
 
   if [[ -n "$DNS_API_ENV_VARS" ]]; then
-    prompt_yes_no_with_default refresh_credentials "检测到 DNS 凭据缓存，是否重新输入 [y/N]: " "0"
+    prompt_yes_no_with_default refresh_credentials "检测到 DNS 凭据缓存, 是否重新输入 [y/N]: " "0"
     if [[ "$refresh_credentials" != "1" ]]; then
       return
     fi
   fi
 
   while true; do
-    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE，空格分隔): "
+    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
     if validate_dns_api_env_vars "$input_env_vars"; then
       DNS_API_ENV_VARS="$input_env_vars"
       return
     fi
-    err "环境变量格式无效，示例: CF_Token=xxx 或 DP_Id=id DP_Key=key"
+    err "环境变量格式无效, 示例: CF_Token=xxx, 文档: $DNS_API_DOC_URL"
   done
 }
 
@@ -1694,7 +1695,7 @@ update_script() {
   fi
 
   UPDATE_AVAILABLE_VERSION=""
-  log "脚本已升级: $SCRIPT_VERSION -> $new_version，重启中"
+  log "脚本已升级: $SCRIPT_VERSION -> $new_version, 重启中"
   save_cache_or_warn
   release_lock
   exec bash "$script_path"
@@ -1713,7 +1714,7 @@ uninstall_script() {
   if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 ACME 客户端: $ACME_SH"
   elif ! "$ACME_SH" --uninstall; then
-    warn "ACME 客户端卸载失败，需手动处理"
+    warn "ACME 客户端卸载失败, 需手动处理"
   fi
 
   prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
@@ -1725,15 +1726,15 @@ uninstall_script() {
     log "ACME_HOME 已删除: $ACME_HOME"
   fi
 
-  resolve_script_path_or_error script_path "脚本路径解析失败，请手动删除脚本" || return 1
+  resolve_script_path_or_error script_path "脚本路径解析失败, 请手动删除脚本" || return 1
 
   if [[ -f "$script_path" ]]; then
     if [[ ! -w "$script_path" ]]; then
-      err "脚本不可写，请手动删除: $script_path"
+      err "脚本不可写, 请手动删除: $script_path"
       return 1
     fi
     if ! rm -f "$script_path"; then
-      err "脚本删除失败，请手动处理: $script_path"
+      err "脚本删除失败, 请手动处理: $script_path"
       return 1
     fi
     log "脚本已删除: $script_path"

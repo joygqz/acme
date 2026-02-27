@@ -1,6 +1,6 @@
 # ACME CertOps
 
-ACME DNS API 运维脚本（支持 acme.sh 官方 DNS API）
+ACME DNS API 运维脚本
 
 ## 快速开始
 
