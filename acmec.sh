@@ -1349,7 +1349,7 @@ prompt_dns_api_env_vars() {
   fi
 
   while true; do
-    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔): "
+    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
     if validate_dns_api_env_vars "$input_env_vars"; then
       DNS_API_ENV_VARS="$input_env_vars"
       return
