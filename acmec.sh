@@ -1557,7 +1557,7 @@ delete_cert() {
   run_or_error "证书删除命令执行失败: $target_domain" "$ACME_SH" "${remove_args[@]}" || return 1
 
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
-  remove_dir_recursively_if_exists "$acme_dir"
+  run_or_error "证书目录清理失败: $acme_dir" remove_dir_recursively_if_exists "$acme_dir" || return 1
 
   log "证书删除完成: $target_domain"
 }
@@ -1608,7 +1608,7 @@ update_script() {
     return 0
   fi
 
-  chmod 755 "$tmp_file"
+  run_or_error "升级临时文件权限设置失败: $tmp_file" chmod 755 "$tmp_file" || return 1
   if ! mv "$tmp_file" "$script_path"; then
     remove_file_and_error "$tmp_file" "升级写入失败: $script_path"
     return 1
@@ -1640,11 +1640,11 @@ uninstall_script() {
 
   prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
   if [[ "$remove_acme_home" == "1" ]]; then
-    remove_dir_recursively_if_exists "$ACME_HOME"
+    run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
     log "目录已删除: $ACME_HOME"
   fi
 
-  remove_dir_recursively_if_exists "$CACHE_HOME"
+  run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
   log "缓存目录清理完成: $CACHE_HOME"
 
   script_path="$(resolve_script_path)" || {
