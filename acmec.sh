@@ -1264,16 +1264,38 @@ prompt_cf_global_key_credentials() {
 
 prompt_cloudflare_credentials_by_mode() {
   local auth_mode="$1"
+  local force_refresh="${2:-0}"
   CF_AUTH_MODE="$auth_mode"
   if [[ "$auth_mode" == "token" ]]; then
+    if [[ "$force_refresh" == "1" ]]; then
+      CF_Token=""
+    fi
     prompt_cf_token_credentials
     return
+  fi
+  if [[ "$force_refresh" == "1" ]]; then
+    CF_Key=""
+    CF_Email=""
   fi
   prompt_cf_global_key_credentials
 }
 
+prompt_cloudflare_auth_mode_with_default() {
+  local target_var="$1"
+  local default_mode="$2"
+  prompt_option_with_default \
+    "$target_var" \
+    "Cloudflare 认证方式 [1] API Token [2] Global API Key (默认: $default_mode): " \
+    "$default_mode" \
+    "认证方式无效" \
+    "1" "token" \
+    "2" "key"
+}
+
 prompt_cloudflare_credentials() {
   local auth_mode="$CF_AUTH_MODE"
+  local has_cached_credentials="0"
+  local refresh_credentials
 
   case "$auth_mode" in
     token|key) ;;
@@ -1289,24 +1311,24 @@ prompt_cloudflare_credentials() {
   esac
 
   if [[ "$auth_mode" == "token" && -n "$CF_Token" ]]; then
-    prompt_cloudflare_credentials_by_mode "token"
+    has_cached_credentials="1"
+  elif [[ "$auth_mode" == "key" && -n "$CF_Key" && -n "$CF_Email" ]]; then
+    has_cached_credentials="1"
+  fi
+
+  if [[ "$has_cached_credentials" == "1" ]]; then
+    prompt_yes_no_with_default refresh_credentials "检测到 Cloudflare 凭据缓存，是否更新 [y/N]: " "0"
+    if [[ "$refresh_credentials" != "1" ]]; then
+      CF_AUTH_MODE="$auth_mode"
+      return
+    fi
+    prompt_cloudflare_auth_mode_with_default auth_mode "$auth_mode"
+    prompt_cloudflare_credentials_by_mode "$auth_mode" "1"
     return
   fi
 
-  if [[ "$auth_mode" == "key" && -n "$CF_Key" && -n "$CF_Email" ]]; then
-    prompt_cloudflare_credentials_by_mode "key"
-    return
-  fi
-
-  prompt_option_with_default \
-    auth_mode \
-    "Cloudflare 认证方式 [1] API Token [2] Global API Key (默认: $auth_mode): " \
-    "$auth_mode" \
-    "认证方式无效" \
-    "1" "token" \
-    "2" "key"
-
-  prompt_cloudflare_credentials_by_mode "$auth_mode"
+  prompt_cloudflare_auth_mode_with_default auth_mode "$auth_mode"
+  prompt_cloudflare_credentials_by_mode "$auth_mode" "0"
 }
 
 apply_cloudflare_credentials_env() {
