@@ -16,7 +16,8 @@ readonly SCRIPT_VERSION="v1.0.6"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
-readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
+readonly CACHE_LEGACY_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
+readonly CACHE_SECRETS_DIR="$CACHE_HOME/secrets.d"
 readonly CACHE_SCHEMA_VERSION="2"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
 readonly CURL_RETRY_COUNT="3"
@@ -333,12 +334,26 @@ load_cached_preferences() {
 }
 
 load_cached_secrets() {
-  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "DNS_API_ENV_VARS" "DNS_API_ENV_VARS" "$ENV_HAS_DNS_API_ENV_VARS"
+  local provider_slug secrets_file cached_value=""
+  [[ -n "$ENV_HAS_DNS_API_ENV_VARS" ]] && return 0
+
+  provider_slug="$(sanitize_provider_cache_key "$DNS_PROVIDER")"
+  secrets_file="$CACHE_SECRETS_DIR/${provider_slug}.tsv"
+  if cached_value="$(read_cache_entry "$secrets_file" "DNS_API_ENV_VARS" 2>/dev/null)"; then
+    DNS_API_ENV_VARS="$cached_value"
+    return 0
+  fi
+
+  # Fallback for older single-file cache.
+  if cached_value="$(read_cache_entry "$CACHE_LEGACY_SECRETS_FILE" "DNS_API_ENV_VARS" 2>/dev/null)"; then
+    DNS_API_ENV_VARS="$cached_value"
+  fi
 }
 
 reset_persistent_cache_files() {
   remove_file_quietly "$CACHE_PREFS_FILE"
-  remove_file_quietly "$CACHE_SECRETS_FILE"
+  remove_file_quietly "$CACHE_LEGACY_SECRETS_FILE"
+  remove_dir_recursively_if_exists "$CACHE_SECRETS_DIR" || true
 }
 
 ensure_cache_schema_compatible() {
@@ -393,8 +408,14 @@ save_cached_preferences() {
 }
 
 save_cached_secrets() {
-  write_cache_entries "$CACHE_SECRETS_FILE" \
+  local provider_slug secrets_file
+  provider_slug="$(sanitize_provider_cache_key "$DNS_PROVIDER")"
+  secrets_file="$CACHE_SECRETS_DIR/${provider_slug}.tsv"
+  write_cache_entries "$secrets_file" \
     "DNS_API_ENV_VARS" "${DNS_API_ENV_VARS:-}"
+
+  # Drop old single-file cache after migration.
+  remove_file_quietly "$CACHE_LEGACY_SECRETS_FILE"
 }
 
 save_persistent_cache() {
@@ -425,6 +446,13 @@ default_output_dir_for_domain() {
     return
   fi
   printf '%s/%s\n' "$base_dir" "$domain"
+}
+
+sanitize_provider_cache_key() {
+  local provider="$1"
+  provider="${provider//[^A-Za-z0-9_]/_}"
+  [[ -n "$provider" ]] || provider="$DEFAULT_DNS_PROVIDER"
+  printf '%s\n' "$provider"
 }
 
 remember_deploy_base_dir() {
@@ -1096,9 +1124,9 @@ prompt_dns_api_env_vars() {
     fi
   fi
 
-  prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
+  prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔): "
   if [[ -n "$DNS_API_ENV_VARS" ]]; then
-    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 回车沿用缓存, 文档: $DNS_API_DOC_URL): "
+    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 留空沿用 $DNS_PROVIDER 缓存): "
   fi
 
   while true; do
@@ -1123,6 +1151,7 @@ prompt_dns_credentials() {
   prompt_dns_provider
   if [[ "$DNS_PROVIDER" != "$previous_provider" ]]; then
     DNS_API_ENV_VARS=""
+    load_cached_secrets
   fi
   prompt_dns_api_env_vars
 }
