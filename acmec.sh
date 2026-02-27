@@ -28,7 +28,7 @@ readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly DNS_PROVIDER_TABLE_COLUMNS="5"
 readonly DNS_PROVIDER_TABLE_CELL_WIDTH="28"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "redeploy_cert" "delete_cert" "upgrade_script" "uninstall_script" )
-readonly -a MENU_LABELS=( "" "证书列表" "申请证书" "重新部署证书" "删除证书" "升级脚本" "卸载工具" )
+readonly -a MENU_LABELS=( "" "证书列表" "申请证书" "重新部署证书" "删除证书" "升级脚本" "卸载脚本" )
 readonly MENU_UPGRADE_SCRIPT_HANDLER="upgrade_script"
 readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
