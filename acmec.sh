@@ -16,6 +16,8 @@ readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
 readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
+readonly CACHE_SCHEMA_VERSION="1"
+readonly CACHE_WRAPPER_VERSION_KEY="CACHE_WRAPPER_VERSION"
 readonly UPDATE_CACHE_TTL_SECONDS="21600"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
 readonly CURL_RETRY_COUNT="3"
@@ -422,6 +424,32 @@ load_cached_secrets() {
   load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Email" "CF_Email" "$ENV_HAS_CF_EMAIL"
 }
 
+reset_persistent_cache_files() {
+  remove_file_quietly "$CACHE_PREFS_FILE"
+  remove_file_quietly "$CACHE_SECRETS_FILE"
+}
+
+ensure_cache_schema_compatible() {
+  local cached_schema="" cached_wrapper_version=""
+
+  [[ -f "$CACHE_PREFS_FILE" ]] || return 0
+  cached_schema="$(read_cache_entry "$CACHE_PREFS_FILE" "CACHE_SCHEMA_VERSION" 2>/dev/null || true)"
+
+  if [[ "$cached_schema" != "$CACHE_SCHEMA_VERSION" ]]; then
+    reset_persistent_cache_files
+    warn "检测到缓存结构版本变化，已重置本地缓存"
+    return 0
+  fi
+
+  cached_wrapper_version="$(read_cache_entry "$CACHE_PREFS_FILE" "$CACHE_WRAPPER_VERSION_KEY" 2>/dev/null || true)"
+  if [[ -n "$cached_wrapper_version" && "$cached_wrapper_version" == "$SCRIPT_VERSION" ]]; then
+    return 0
+  fi
+
+  reset_persistent_cache_files
+  warn "检测到脚本版本变化，已重置本地缓存"
+}
+
 normalize_cached_settings() {
   normalize_issue_options
 
@@ -446,6 +474,7 @@ normalize_cached_settings() {
 
 load_persistent_cache() {
   ensure_cache_home || return 1
+  ensure_cache_schema_compatible
   load_cached_preferences
 
   if [[ "$CACHE_PERSIST_CREDENTIALS" == "1" ]]; then
@@ -461,6 +490,8 @@ load_persistent_cache() {
 
 save_cached_preferences() {
   write_cache_entries "$CACHE_PREFS_FILE" \
+    "CACHE_SCHEMA_VERSION" "$CACHE_SCHEMA_VERSION" \
+    "$CACHE_WRAPPER_VERSION_KEY" "$SCRIPT_VERSION" \
     "EMAIL" "$EMAIL" \
     "ISSUE_KEY_TYPE" "$ISSUE_KEY_TYPE" \
     "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
