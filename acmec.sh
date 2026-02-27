@@ -1524,10 +1524,7 @@ create_cert() {
     err "证书签发失败"
     return 1
   fi
-  if ! install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"; then
-    err "证书部署失败"
-    return 1
-  fi
+  run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
   log "证书签发完成: $DOMAIN -> $OUTPUT_DIR"
@@ -1542,10 +1539,7 @@ update_cert() {
   fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
-  if ! install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"; then
-    err "证书路径更新失败: $target_domain"
-    return 1
-  fi
+  run_or_error "证书路径更新失败: $target_domain" install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant" || return 1
   remember_deploy_base_dir "$target_domain" "$cert_dir"
   log "证书部署路径更新完成: $target_domain -> $cert_dir"
 }
