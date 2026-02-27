@@ -12,14 +12,13 @@ readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly DNS_API_DOC_URL="https://go-acme.github.io/lego/dns/"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.3"
+readonly SCRIPT_VERSION="v1.0.4"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
 readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
 readonly CACHE_SCHEMA_VERSION="2"
 readonly CACHE_WRAPPER_VERSION_KEY="CACHE_WRAPPER_VERSION"
-readonly UPDATE_CACHE_TTL_SECONDS="21600"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
 readonly CURL_RETRY_COUNT="3"
 readonly CURL_RETRY_DELAY="1"
@@ -56,9 +55,6 @@ DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
 DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
 CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS:-1}"
-UPDATE_CACHE_LAST_CHECK_TS=""
-UPDATE_CACHE_BASELINE_VERSION=""
-UPDATE_CACHE_NEWER_VERSION=""
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
@@ -244,14 +240,8 @@ is_version_newer() {
 }
 
 check_script_update() {
-  local remote_version now_ts
+  local remote_version
   UPDATE_AVAILABLE_VERSION=""
-
-  now_ts="$(current_epoch_seconds)"
-  if is_update_cache_fresh "$now_ts"; then
-    UPDATE_AVAILABLE_VERSION="$UPDATE_CACHE_NEWER_VERSION"
-    return
-  fi
 
   if ! remote_version="$(fetch_remote_script_version)"; then
     return
@@ -260,10 +250,6 @@ check_script_update() {
   if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     UPDATE_AVAILABLE_VERSION="$remote_version"
   fi
-
-  UPDATE_CACHE_LAST_CHECK_TS="$now_ts"
-  UPDATE_CACHE_BASELINE_VERSION="$SCRIPT_VERSION"
-  UPDATE_CACHE_NEWER_VERSION="$UPDATE_AVAILABLE_VERSION"
 }
 
 get_process_start_token() {
@@ -426,9 +412,6 @@ load_cached_preferences() {
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DNS_PROVIDER" "DNS_PROVIDER" "$ENV_HAS_DNS_PROVIDER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "CACHE_PERSIST_CREDENTIALS" "CACHE_PERSIST_CREDENTIALS" "$ENV_HAS_CACHE_PERSIST_CREDENTIALS"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_LAST_CHECK_TS" "UPDATE_CACHE_LAST_CHECK_TS"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_BASELINE_VERSION" "UPDATE_CACHE_BASELINE_VERSION"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_NEWER_VERSION" "UPDATE_CACHE_NEWER_VERSION"
 }
 
 load_cached_secrets() {
@@ -482,12 +465,6 @@ normalize_cached_settings() {
   fi
 
   [[ -n "$DEPLOY_BASE_DIR" ]] || DEPLOY_BASE_DIR="/etc/ssl"
-
-  case "$UPDATE_CACHE_LAST_CHECK_TS" in
-    ''|*[!0-9]*)
-      UPDATE_CACHE_LAST_CHECK_TS=""
-      ;;
-  esac
 }
 
 load_persistent_cache() {
@@ -515,10 +492,7 @@ save_cached_preferences() {
     "ISSUE_FORCE_RENEW" "$ISSUE_FORCE_RENEW" \
     "DNS_PROVIDER" "$DNS_PROVIDER" \
     "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR" \
-    "CACHE_PERSIST_CREDENTIALS" "$CACHE_PERSIST_CREDENTIALS" \
-    "UPDATE_CACHE_LAST_CHECK_TS" "$UPDATE_CACHE_LAST_CHECK_TS" \
-    "UPDATE_CACHE_BASELINE_VERSION" "$UPDATE_CACHE_BASELINE_VERSION" \
-    "UPDATE_CACHE_NEWER_VERSION" "$UPDATE_CACHE_NEWER_VERSION"
+    "CACHE_PERSIST_CREDENTIALS" "$CACHE_PERSIST_CREDENTIALS"
 }
 
 save_cached_secrets() {
@@ -574,19 +548,6 @@ remember_deploy_base_dir() {
   base_dir="${output_dir%/"$domain"}"
   [[ -n "$base_dir" ]] || base_dir="/"
   DEPLOY_BASE_DIR="$base_dir"
-}
-
-current_epoch_seconds() {
-  date +%s
-}
-
-is_update_cache_fresh() {
-  local now_ts="$1"
-
-  [[ -n "$UPDATE_CACHE_LAST_CHECK_TS" ]] || return 1
-  [[ "$UPDATE_CACHE_BASELINE_VERSION" == "$SCRIPT_VERSION" ]] || return 1
-  ((now_ts >= UPDATE_CACHE_LAST_CHECK_TS)) || return 1
-  (((now_ts - UPDATE_CACHE_LAST_CHECK_TS) < UPDATE_CACHE_TTL_SECONDS))
 }
 
 write_dir_lock_state() {
@@ -1749,9 +1710,6 @@ update_script() {
   if ! is_version_newer "$new_version" "$SCRIPT_VERSION"; then
     remove_file_quietly "$tmp_file"
     UPDATE_AVAILABLE_VERSION=""
-    UPDATE_CACHE_LAST_CHECK_TS="$(current_epoch_seconds)"
-    UPDATE_CACHE_BASELINE_VERSION="$SCRIPT_VERSION"
-    UPDATE_CACHE_NEWER_VERSION=""
     log "已是最新版本"
     return 0
   fi
