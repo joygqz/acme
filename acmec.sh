@@ -1581,7 +1581,7 @@ print_main_menu() {
   fi
 
   printf '\n'
-  printf '%s=== ACME 证书运维 %s ===%s\n' "$title_color" "$SCRIPT_VERSION" "$color_reset"
+  printf '%s=== ACME 证书管理 %s ===%s\n' "$title_color" "$SCRIPT_VERSION" "$color_reset"
   printf '%s\n' "$REPO_URL"
   printf '\n'
   for ((menu_idx = 1; menu_idx <= MENU_MAX_CHOICE; menu_idx++)); do
