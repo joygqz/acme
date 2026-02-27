@@ -10,9 +10,14 @@ readonly DEFAULT_ACME_HOME="/root/.acme.sh"
 readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
-readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acme.sh"
+readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
 readonly SCRIPT_VERSION="v1.0.0"
-readonly LOCK_FILE="/var/lock/joygqz-acme.lock"
+readonly DEFAULT_CACHE_HOME="/root/.acmec"
+readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
+readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
+readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
+readonly UPDATE_CACHE_TTL_SECONDS="21600"
+readonly LOCK_FILE="/var/lock/acmec.lock"
 readonly CURL_RETRY_COUNT="3"
 readonly CURL_RETRY_DELAY="1"
 readonly SCRIPT_CHECK_CONNECT_TIMEOUT="5"
@@ -23,16 +28,34 @@ readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
 readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
 
+readonly ENV_HAS_EMAIL="${EMAIL+1}"
+readonly ENV_HAS_CF_KEY="${CF_Key+1}"
+readonly ENV_HAS_CF_EMAIL="${CF_Email+1}"
+readonly ENV_HAS_CF_TOKEN="${CF_Token+1}"
+readonly ENV_HAS_ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE+1}"
+readonly ENV_HAS_ISSUE_CA_SERVER="${ISSUE_CA_SERVER+1}"
+readonly ENV_HAS_ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD+1}"
+readonly ENV_HAS_ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW+1}"
+readonly ENV_HAS_CF_AUTH_MODE="${CF_AUTH_MODE+1}"
+readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
+readonly ENV_HAS_CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS+1}"
+
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 CF_Key="${CF_Key:-}"
 CF_Email="${CF_Email:-}"
 CF_Token="${CF_Token:-}"
-ISSUE_KEY_TYPE="$DEFAULT_KEY_TYPE"
-ISSUE_CA_SERVER="$DEFAULT_CA_SERVER"
-ISSUE_INCLUDE_WILDCARD="0"
-ISSUE_FORCE_RENEW="0"
+ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE:-$DEFAULT_KEY_TYPE}"
+ISSUE_CA_SERVER="${ISSUE_CA_SERVER:-$DEFAULT_CA_SERVER}"
+ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD:-0}"
+ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW:-0}"
+CF_AUTH_MODE="${CF_AUTH_MODE:-token}"
+DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
+CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS:-1}"
+UPDATE_CACHE_LAST_CHECK_TS=""
+UPDATE_CACHE_BASELINE_VERSION=""
+UPDATE_CACHE_NEWER_VERSION=""
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
@@ -206,11 +229,26 @@ is_version_newer() {
 }
 
 check_script_update() {
-  local remote_version
+  local remote_version now_ts
   UPDATE_AVAILABLE_VERSION=""
-  if remote_version="$(fetch_remote_script_version)" && is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
+
+  now_ts="$(current_epoch_seconds)"
+  if is_update_cache_fresh "$now_ts"; then
+    UPDATE_AVAILABLE_VERSION="$UPDATE_CACHE_NEWER_VERSION"
+    return
+  fi
+
+  if ! remote_version="$(fetch_remote_script_version)"; then
+    return
+  fi
+
+  if is_version_newer "$remote_version" "$SCRIPT_VERSION"; then
     UPDATE_AVAILABLE_VERSION="$remote_version"
   fi
+
+  UPDATE_CACHE_LAST_CHECK_TS="$now_ts"
+  UPDATE_CACHE_BASELINE_VERSION="$SCRIPT_VERSION"
+  UPDATE_CACHE_NEWER_VERSION="$UPDATE_AVAILABLE_VERSION"
 }
 
 get_process_start_token() {
@@ -256,6 +294,241 @@ remove_file_and_error() {
   shift
   remove_file_quietly "$file_path"
   err "$*"
+}
+
+ensure_cache_home() {
+  if [[ ! -d "$CACHE_HOME" ]]; then
+    mkdir -p "$CACHE_HOME" || return 1
+  fi
+
+  chmod 700 "$CACHE_HOME" >/dev/null 2>&1 || true
+}
+
+normalize_cache_value() {
+  local value="$1"
+  value="${value//$'\t'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\r'/ }"
+  printf '%s' "$value"
+}
+
+read_cache_entry() {
+  local cache_file="$1"
+  local key="$2"
+
+  [[ -f "$cache_file" ]] || return 1
+  awk -F'\t' -v key="$key" '
+    $1 == key {
+      start = length($1) + 2
+      if (start > (length($0) + 1)) {
+        print ""
+      } else {
+        print substr($0, start)
+      }
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$cache_file"
+}
+
+load_cache_entry_into_var() {
+  local cache_file="$1"
+  local key="$2"
+  local target_var="$3"
+  local skip_if_env="${4:-}"
+  local value
+
+  if [[ -n "$skip_if_env" ]]; then
+    return
+  fi
+
+  if value="$(read_cache_entry "$cache_file" "$key")"; then
+    printf -v "$target_var" '%s' "$value"
+  fi
+}
+
+write_cache_entries() {
+  local cache_file="$1"
+  shift
+
+  local cache_dir cache_base tmp_file key value
+  cache_dir="$(dirname "$cache_file")"
+  cache_base="$(basename "$cache_file")"
+
+  ensure_cache_home || return 1
+  if [[ "$cache_dir" != "$CACHE_HOME" ]]; then
+    mkdir -p "$cache_dir" || return 1
+    chmod 700 "$cache_dir" >/dev/null 2>&1 || true
+  fi
+
+  tmp_file="$(mktemp "${cache_dir}/.${cache_base}.XXXXXX")" || return 1
+  chmod 600 "$tmp_file" >/dev/null 2>&1 || true
+
+  while [[ "$#" -ge 2 ]]; do
+    key="$1"
+    value="$(normalize_cache_value "$2")"
+    shift 2
+    printf '%s\t%s\n' "$key" "$value" >> "$tmp_file"
+  done
+
+  if [[ "$#" -ne 0 ]]; then
+    remove_file_quietly "$tmp_file"
+    return 1
+  fi
+
+  if ! mv "$tmp_file" "$cache_file"; then
+    remove_file_quietly "$tmp_file"
+    return 1
+  fi
+
+  chmod 600 "$cache_file" >/dev/null 2>&1 || true
+}
+
+load_cached_preferences() {
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "EMAIL" "EMAIL" "$ENV_HAS_EMAIL"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_KEY_TYPE" "ISSUE_KEY_TYPE" "$ENV_HAS_ISSUE_KEY_TYPE"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_CA_SERVER" "ISSUE_CA_SERVER" "$ENV_HAS_ISSUE_CA_SERVER"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_INCLUDE_WILDCARD" "ISSUE_INCLUDE_WILDCARD" "$ENV_HAS_ISSUE_INCLUDE_WILDCARD"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_FORCE_RENEW" "ISSUE_FORCE_RENEW" "$ENV_HAS_ISSUE_FORCE_RENEW"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "CF_AUTH_MODE" "CF_AUTH_MODE" "$ENV_HAS_CF_AUTH_MODE"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "CACHE_PERSIST_CREDENTIALS" "CACHE_PERSIST_CREDENTIALS" "$ENV_HAS_CACHE_PERSIST_CREDENTIALS"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_LAST_CHECK_TS" "UPDATE_CACHE_LAST_CHECK_TS"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_BASELINE_VERSION" "UPDATE_CACHE_BASELINE_VERSION"
+  load_cache_entry_into_var "$CACHE_PREFS_FILE" "UPDATE_CACHE_NEWER_VERSION" "UPDATE_CACHE_NEWER_VERSION"
+}
+
+load_cached_secrets() {
+  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Token" "CF_Token" "$ENV_HAS_CF_TOKEN"
+  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Key" "CF_Key" "$ENV_HAS_CF_KEY"
+  load_cache_entry_into_var "$CACHE_SECRETS_FILE" "CF_Email" "CF_Email" "$ENV_HAS_CF_EMAIL"
+}
+
+normalize_cached_settings() {
+  normalize_issue_options
+
+  case "$CF_AUTH_MODE" in
+    token|key) ;;
+    *) CF_AUTH_MODE="token" ;;
+  esac
+
+  case "$CACHE_PERSIST_CREDENTIALS" in
+    0|1) ;;
+    *) CACHE_PERSIST_CREDENTIALS="1" ;;
+  esac
+
+  [[ -n "$DEPLOY_BASE_DIR" ]] || DEPLOY_BASE_DIR="/etc/ssl"
+
+  case "$UPDATE_CACHE_LAST_CHECK_TS" in
+    ''|*[!0-9]*)
+      UPDATE_CACHE_LAST_CHECK_TS=""
+      ;;
+  esac
+}
+
+load_persistent_cache() {
+  ensure_cache_home || return 1
+  load_cached_preferences
+
+  if [[ "$CACHE_PERSIST_CREDENTIALS" == "1" ]]; then
+    load_cached_secrets
+  else
+    CF_Token=""
+    CF_Key=""
+    CF_Email=""
+  fi
+
+  normalize_cached_settings
+}
+
+save_cached_preferences() {
+  write_cache_entries "$CACHE_PREFS_FILE" \
+    "EMAIL" "$EMAIL" \
+    "ISSUE_KEY_TYPE" "$ISSUE_KEY_TYPE" \
+    "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
+    "ISSUE_INCLUDE_WILDCARD" "$ISSUE_INCLUDE_WILDCARD" \
+    "ISSUE_FORCE_RENEW" "$ISSUE_FORCE_RENEW" \
+    "CF_AUTH_MODE" "$CF_AUTH_MODE" \
+    "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR" \
+    "CACHE_PERSIST_CREDENTIALS" "$CACHE_PERSIST_CREDENTIALS" \
+    "UPDATE_CACHE_LAST_CHECK_TS" "$UPDATE_CACHE_LAST_CHECK_TS" \
+    "UPDATE_CACHE_BASELINE_VERSION" "$UPDATE_CACHE_BASELINE_VERSION" \
+    "UPDATE_CACHE_NEWER_VERSION" "$UPDATE_CACHE_NEWER_VERSION"
+}
+
+save_cached_secrets() {
+  if [[ "$CACHE_PERSIST_CREDENTIALS" != "1" ]]; then
+    remove_file_quietly "$CACHE_SECRETS_FILE"
+    return 0
+  fi
+
+  write_cache_entries "$CACHE_SECRETS_FILE" \
+    "CF_Token" "$CF_Token" \
+    "CF_Key" "$CF_Key" \
+    "CF_Email" "$CF_Email"
+}
+
+save_persistent_cache() {
+  normalize_cached_settings
+  save_cached_preferences || return 1
+  save_cached_secrets
+}
+
+save_cache_or_warn() {
+  if ! save_persistent_cache; then
+    warn "缓存写入失败: $CACHE_HOME"
+  fi
+}
+
+load_cache_or_warn() {
+  if ! load_persistent_cache; then
+    warn "缓存加载失败: $CACHE_HOME"
+  fi
+}
+
+default_output_dir_for_domain() {
+  local domain="$1"
+  local base_dir="${DEPLOY_BASE_DIR%/}"
+
+  [[ -n "$base_dir" ]] || base_dir="/"
+  if [[ "$base_dir" == "/" ]]; then
+    printf '/%s\n' "$domain"
+    return
+  fi
+  printf '%s/%s\n' "$base_dir" "$domain"
+}
+
+remember_deploy_base_dir() {
+  local domain="$1"
+  local output_dir="$2"
+  local base_dir
+
+  [[ -n "$domain" && -n "$output_dir" ]] || return
+  if [[ "$output_dir" != */"$domain" ]]; then
+    return
+  fi
+
+  base_dir="${output_dir%/"$domain"}"
+  [[ -n "$base_dir" ]] || base_dir="/"
+  DEPLOY_BASE_DIR="$base_dir"
+}
+
+current_epoch_seconds() {
+  date +%s
+}
+
+is_update_cache_fresh() {
+  local now_ts="$1"
+
+  [[ -n "$UPDATE_CACHE_LAST_CHECK_TS" ]] || return 1
+  [[ "$UPDATE_CACHE_BASELINE_VERSION" == "$SCRIPT_VERSION" ]] || return 1
+  ((now_ts >= UPDATE_CACHE_LAST_CHECK_TS)) || return 1
+  (((now_ts - UPDATE_CACHE_LAST_CHECK_TS) < UPDATE_CACHE_TTL_SECONDS))
 }
 
 write_dir_lock_state() {
@@ -366,6 +639,16 @@ warn() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+run_or_error() {
+  local error_msg="$1"
+  shift
+
+  if ! "$@"; then
+    err "$error_msg"
+    return 1
+  fi
 }
 
 get_missing_base_dependencies() {
@@ -578,7 +861,7 @@ install_acme_sh() {
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    die "acme.sh 安装失败: 未找到 $ACME_SH"
+    die "ACME 客户端安装失败: 未找到 $ACME_SH"
   fi
 
   if [[ "${ACME_AUTO_UPGRADE:-0}" == "1" ]]; then
@@ -915,25 +1198,42 @@ prompt_cf_global_key_credentials() {
 }
 
 prompt_cloudflare_credentials() {
-  local auth_mode
-  if [[ -n "$CF_Token" ]]; then
+  local auth_mode="$CF_AUTH_MODE"
+
+  case "$auth_mode" in
+    token|key) ;;
+    *)
+      if [[ -n "$CF_Token" ]]; then
+        auth_mode="token"
+      elif [[ -n "$CF_Key" || -n "$CF_Email" ]]; then
+        auth_mode="key"
+      else
+        auth_mode="token"
+      fi
+      ;;
+  esac
+
+  if [[ "$auth_mode" == "token" && -n "$CF_Token" ]]; then
+    CF_AUTH_MODE="token"
     prompt_cf_token_credentials
     return
   fi
 
-  if [[ -n "$CF_Key" || -n "$CF_Email" ]]; then
+  if [[ "$auth_mode" == "key" && -n "$CF_Key" && -n "$CF_Email" ]]; then
+    CF_AUTH_MODE="key"
     prompt_cf_global_key_credentials
     return
   fi
 
   prompt_option_with_default \
     auth_mode \
-    "Cloudflare 认证方式 [1] API Token (推荐) [2] Global API Key: " \
-    "token" \
+    "Cloudflare 认证方式 [1] API Token [2] Global API Key (默认: $auth_mode): " \
+    "$auth_mode" \
     "认证方式无效" \
     "1" "token" \
     "2" "key"
 
+  CF_AUTH_MODE="$auth_mode"
   if [[ "$auth_mode" == "token" ]]; then
     prompt_cf_token_credentials
   else
@@ -967,17 +1267,17 @@ install_cert_to_dir() {
 
   [[ -n "$cert_variant" ]] || die "证书类型不能为空"
 
-  mkdir -p "$cert_dir"
-  chmod 755 "$cert_dir"
+  run_or_error "部署目录创建失败: $cert_dir" mkdir -p "$cert_dir" || return 1
+  run_or_error "部署目录权限设置失败: $cert_dir" chmod 755 "$cert_dir" || return 1
 
   if is_ecc_variant "$cert_variant"; then
     install_args+=( --ecc )
   fi
 
-  "$ACME_SH" "${install_args[@]}"
+  run_or_error "证书部署命令执行失败: $cert_domain" "$ACME_SH" "${install_args[@]}" || return 1
 
-  chmod 600 "$cert_dir/$cert_domain.key"
-  chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer"
+  run_or_error "私钥权限设置失败: $cert_dir/$cert_domain.key" chmod 600 "$cert_dir/$cert_domain.key" || return 1
+  run_or_error "证书文件权限设置失败: $cert_dir" chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer" || return 1
 }
 
 fetch_cert_list_raw() {
@@ -1202,11 +1502,7 @@ list_certs() {
 }
 
 create_cert() {
-  local cert_variant cert_dir
-  OUTPUT_DIR=""
-  CF_Key=""
-  CF_Email=""
-  CF_Token=""
+  local cert_variant cert_dir default_output_dir
   DOMAIN="$(prompt_domain_value "请输入域名 (示例: example.com): ")"
 
   if cert_domain_exists "$DOMAIN"; then
@@ -1219,7 +1515,8 @@ create_cert() {
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
-  prompt_output_dir_with_default OUTPUT_DIR "/etc/ssl/$DOMAIN"
+  default_output_dir="$(default_output_dir_for_domain "$DOMAIN")"
+  prompt_output_dir_with_default OUTPUT_DIR "$default_output_dir"
   apply_cloudflare_credentials_env
   if ! issue_cert; then
     cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
@@ -1227,7 +1524,11 @@ create_cert() {
     err "证书签发失败"
     return 1
   fi
-  install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"
+  if ! install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant"; then
+    err "证书部署失败"
+    return 1
+  fi
+  remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
   log "证书签发完成: $DOMAIN -> $OUTPUT_DIR"
 }
@@ -1241,7 +1542,11 @@ update_cert() {
   fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
-  install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"
+  if ! install_cert_to_dir "$target_domain" "$cert_dir" "$cert_variant"; then
+    err "证书路径更新失败: $target_domain"
+    return 1
+  fi
+  remember_deploy_base_dir "$target_domain" "$cert_dir"
   log "证书部署路径更新完成: $target_domain -> $cert_dir"
 }
 
@@ -1255,7 +1560,7 @@ delete_cert() {
   if is_ecc_variant "$cert_variant"; then
     remove_args+=( --ecc )
   fi
-  "$ACME_SH" "${remove_args[@]}"
+  run_or_error "证书删除命令执行失败: $target_domain" "$ACME_SH" "${remove_args[@]}" || return 1
 
   acme_dir="$(get_cert_dir_by_variant "$target_domain" "$cert_variant")"
   remove_dir_recursively_if_exists "$acme_dir"
@@ -1281,7 +1586,7 @@ update_script() {
   fi
 
   script_dir="$(dirname "$script_path")"
-  if ! tmp_file="$(mktemp "${script_dir}/.acme.sh.update.XXXXXX")"; then
+  if ! tmp_file="$(mktemp "${script_dir}/.acmec.sh.update.XXXXXX")"; then
     err "临时文件创建失败"
     return 1
   fi
@@ -1317,6 +1622,7 @@ update_script() {
 
   UPDATE_AVAILABLE_VERSION=""
   log "脚本升级完成: $SCRIPT_VERSION -> $new_version，准备重启"
+  save_cache_or_warn
   release_lock
   exec bash "$script_path"
   die "脚本重启失败: $script_path"
@@ -1326,16 +1632,16 @@ uninstall_script() {
   local confirmed remove_acme_home
   local script_path
 
-  prompt_yes_no_with_default confirmed "确认卸载 acme.sh 并删除当前脚本? [y/N]: " "0"
+  prompt_yes_no_with_default confirmed "确认卸载 ACME 客户端并删除当前脚本? [y/N]: " "0"
   if [[ "$confirmed" != "1" ]]; then
     log "操作取消"
     return 0
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
-    warn "未找到 acme.sh: $ACME_SH"
+    warn "未找到 ACME 客户端: $ACME_SH"
   elif ! "$ACME_SH" --uninstall; then
-    warn "acme.sh 卸载失败，需手动处理"
+    warn "ACME 客户端卸载失败，需手动处理"
   fi
 
   prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
@@ -1343,6 +1649,9 @@ uninstall_script() {
     remove_dir_recursively_if_exists "$ACME_HOME"
     log "目录已删除: $ACME_HOME"
   fi
+
+  remove_dir_recursively_if_exists "$CACHE_HOME"
+  log "缓存目录清理完成: $CACHE_HOME"
 
   script_path="$(resolve_script_path)" || {
     err "卸载完成，未解析到脚本路径，需手动删除"
@@ -1419,6 +1728,7 @@ run_menu() {
 
     read_prompt_value choice "请选择 [1-${max_choice}]: "
     run_menu_action "$choice" || true
+    save_cache_or_warn
   done
 }
 
@@ -1434,11 +1744,13 @@ main() {
   require_root
   acquire_lock
   init_colors
+  load_cache_or_warn
   detect_os
   install_deps
   prompt_install_email_if_needed
   install_acme_sh
   check_script_update
+  save_cache_or_warn
   run_menu
 }
 
