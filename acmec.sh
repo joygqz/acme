@@ -12,13 +12,12 @@ readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly DNS_API_DOC_URL="https://go-acme.github.io/lego/dns/"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.5"
+readonly SCRIPT_VERSION="v1.0.6"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
 readonly CACHE_SECRETS_FILE="$CACHE_HOME/secrets.tsv"
 readonly CACHE_SCHEMA_VERSION="2"
-readonly CACHE_WRAPPER_VERSION_KEY="CACHE_WRAPPER_VERSION"
 readonly LOCK_FILE="/var/lock/acmec.sh.lock"
 readonly CURL_RETRY_COUNT="3"
 readonly CURL_RETRY_DELAY="1"
@@ -42,7 +41,6 @@ readonly ENV_HAS_ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW+1}"
 readonly ENV_HAS_DNS_PROVIDER="${DNS_PROVIDER+1}"
 readonly ENV_HAS_DNS_API_ENV_VARS="${DNS_API_ENV_VARS+1}"
 readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
-readonly ENV_HAS_CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS+1}"
 
 DOMAIN="${DOMAIN:-}"
 EMAIL="${EMAIL:-}"
@@ -54,7 +52,6 @@ ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW:-0}"
 DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
 DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
-CACHE_PERSIST_CREDENTIALS="${CACHE_PERSIST_CREDENTIALS:-1}"
 PKG_TYPE=""
 CRON_SERVICE=""
 ACME_SH="$ACME_HOME/acme.sh"
@@ -134,58 +131,10 @@ extract_script_version() {
 
 parse_semver() {
   local version="$1"
-  local regex='^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+  local regex='^v?([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$'
 
   [[ "$version" =~ $regex ]] || return 1
-  printf '%s\t%s\t%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]}"
-}
-
-is_prerelease_newer() {
-  local candidate_pre="$1"
-  local baseline_pre="$2"
-  local -a candidate_parts=()
-  local -a baseline_parts=()
-  local part_idx=0
-  local candidate_id baseline_id
-  IFS='.' read -r -a candidate_parts <<< "$candidate_pre"
-  IFS='.' read -r -a baseline_parts <<< "$baseline_pre"
-
-  while true; do
-    candidate_id="${candidate_parts[$part_idx]:-}"
-    baseline_id="${baseline_parts[$part_idx]:-}"
-
-    if [[ -z "$candidate_id" && -z "$baseline_id" ]]; then
-      return 1
-    fi
-    if [[ -z "$candidate_id" ]]; then
-      return 1
-    fi
-    if [[ -z "$baseline_id" ]]; then
-      return 0
-    fi
-
-    if [[ "$candidate_id" =~ ^[0-9]+$ && "$baseline_id" =~ ^[0-9]+$ ]]; then
-      if ((10#$candidate_id > 10#$baseline_id)); then
-        return 0
-      fi
-      if ((10#$candidate_id < 10#$baseline_id)); then
-        return 1
-      fi
-    elif [[ "$candidate_id" =~ ^[0-9]+$ ]]; then
-      return 1
-    elif [[ "$baseline_id" =~ ^[0-9]+$ ]]; then
-      return 0
-    else
-      if [[ "$candidate_id" > "$baseline_id" ]]; then
-        return 0
-      fi
-      if [[ "$candidate_id" < "$baseline_id" ]]; then
-        return 1
-      fi
-    fi
-
-    part_idx=$((part_idx + 1))
-  done
+  printf '%s\t%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 }
 
 fetch_remote_script_version() {
@@ -201,11 +150,11 @@ fetch_remote_script_version() {
 is_version_newer() {
   local candidate="$1"
   local baseline="$2"
-  local candidate_major candidate_minor candidate_patch candidate_pre
-  local baseline_major baseline_minor baseline_patch baseline_pre
+  local candidate_major candidate_minor candidate_patch
+  local baseline_major baseline_minor baseline_patch
   [[ "$candidate" != "$baseline" ]] || return 1
-  IFS=$'\t' read -r candidate_major candidate_minor candidate_patch candidate_pre <<< "$(parse_semver "$candidate")" || return 1
-  IFS=$'\t' read -r baseline_major baseline_minor baseline_patch baseline_pre <<< "$(parse_semver "$baseline")" || return 1
+  IFS=$'\t' read -r candidate_major candidate_minor candidate_patch <<< "$(parse_semver "$candidate")" || return 1
+  IFS=$'\t' read -r baseline_major baseline_minor baseline_patch <<< "$(parse_semver "$baseline")" || return 1
 
   if ((10#$candidate_major != 10#$baseline_major)); then
     ((10#$candidate_major > 10#$baseline_major))
@@ -219,18 +168,7 @@ is_version_newer() {
     ((10#$candidate_patch > 10#$baseline_patch))
     return
   fi
-
-  if [[ -z "$candidate_pre" && -n "$baseline_pre" ]]; then
-    return 0
-  fi
-  if [[ -n "$candidate_pre" && -z "$baseline_pre" ]]; then
-    return 1
-  fi
-  if [[ -z "$candidate_pre" && -z "$baseline_pre" ]]; then
-    return 1
-  fi
-
-  is_prerelease_newer "$candidate_pre" "$baseline_pre"
+  return 1
 }
 
 check_script_update() {
@@ -254,8 +192,21 @@ remove_file_quietly() {
 
 is_unsafe_delete_target() {
   local dir_path="$1"
+  local resolved_path=""
   case "$dir_path" in
-    ""|"/"|"."|"..")
+    ""|"/"|"."|".."|"/."|"/.."|*/..|*"/../"*|*/.|*"/./"*)
+      return 0
+      ;;
+  esac
+
+  if command_exists realpath; then
+    resolved_path="$(realpath -m -- "$dir_path" 2>/dev/null || true)"
+  elif command_exists readlink; then
+    resolved_path="$(readlink -f -- "$dir_path" 2>/dev/null || true)"
+  fi
+
+  case "$resolved_path" in
+    "/"|"/."|"/..")
       return 0
       ;;
   esac
@@ -379,7 +330,6 @@ load_cached_preferences() {
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_FORCE_RENEW" "ISSUE_FORCE_RENEW" "$ENV_HAS_ISSUE_FORCE_RENEW"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DNS_PROVIDER" "DNS_PROVIDER" "$ENV_HAS_DNS_PROVIDER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "CACHE_PERSIST_CREDENTIALS" "CACHE_PERSIST_CREDENTIALS" "$ENV_HAS_CACHE_PERSIST_CREDENTIALS"
 }
 
 load_cached_secrets() {
@@ -392,7 +342,7 @@ reset_persistent_cache_files() {
 }
 
 ensure_cache_schema_compatible() {
-  local cached_schema="" cached_wrapper_version=""
+  local cached_schema=""
 
   [[ -f "$CACHE_PREFS_FILE" ]] || return 0
   cached_schema="$(read_cache_entry "$CACHE_PREFS_FILE" "CACHE_SCHEMA_VERSION" 2>/dev/null || true)"
@@ -400,16 +350,8 @@ ensure_cache_schema_compatible() {
   if [[ "$cached_schema" != "$CACHE_SCHEMA_VERSION" ]]; then
     reset_persistent_cache_files
     warn "缓存结构变更, 已重置缓存"
-    return 0
+    return
   fi
-
-  cached_wrapper_version="$(read_cache_entry "$CACHE_PREFS_FILE" "$CACHE_WRAPPER_VERSION_KEY" 2>/dev/null || true)"
-  if [[ -n "$cached_wrapper_version" && "$cached_wrapper_version" == "$SCRIPT_VERSION" ]]; then
-    return 0
-  fi
-
-  reset_persistent_cache_files
-  warn "脚本版本变更, 已重置缓存"
 }
 
 normalize_cached_settings() {
@@ -423,11 +365,6 @@ normalize_cached_settings() {
       ;;
   esac
 
-  case "$CACHE_PERSIST_CREDENTIALS" in
-    0|1) ;;
-    *) CACHE_PERSIST_CREDENTIALS="1" ;;
-  esac
-
   if [[ -n "$DNS_API_ENV_VARS" ]] && ! validate_dns_api_env_vars "$DNS_API_ENV_VARS"; then
     DNS_API_ENV_VARS=""
   fi
@@ -439,36 +376,23 @@ load_persistent_cache() {
   ensure_cache_home || return 1
   ensure_cache_schema_compatible
   load_cached_preferences
-
-  if [[ "$CACHE_PERSIST_CREDENTIALS" == "1" ]]; then
-    load_cached_secrets
-  else
-    DNS_API_ENV_VARS=""
-  fi
-
+  load_cached_secrets
   normalize_cached_settings
 }
 
 save_cached_preferences() {
   write_cache_entries "$CACHE_PREFS_FILE" \
     "CACHE_SCHEMA_VERSION" "$CACHE_SCHEMA_VERSION" \
-    "$CACHE_WRAPPER_VERSION_KEY" "$SCRIPT_VERSION" \
     "EMAIL" "$EMAIL" \
     "ISSUE_KEY_TYPE" "$ISSUE_KEY_TYPE" \
     "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
     "ISSUE_INCLUDE_WILDCARD" "$ISSUE_INCLUDE_WILDCARD" \
     "ISSUE_FORCE_RENEW" "$ISSUE_FORCE_RENEW" \
     "DNS_PROVIDER" "$DNS_PROVIDER" \
-    "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR" \
-    "CACHE_PERSIST_CREDENTIALS" "$CACHE_PERSIST_CREDENTIALS"
+    "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR"
 }
 
 save_cached_secrets() {
-  if [[ "$CACHE_PERSIST_CREDENTIALS" != "1" ]]; then
-    remove_file_quietly "$CACHE_SECRETS_FILE"
-    return 0
-  fi
-
   write_cache_entries "$CACHE_SECRETS_FILE" \
     "DNS_API_ENV_VARS" "${DNS_API_ENV_VARS:-}"
 }
@@ -518,10 +442,6 @@ remember_deploy_base_dir() {
   DEPLOY_BASE_DIR="$base_dir"
 }
 
-lock_conflict() {
-  die "已有实例运行中"
-}
-
 acquire_lock() {
   mkdir -p "$(dirname "$LOCK_FILE")"
 
@@ -532,7 +452,7 @@ acquire_lock() {
 
   exec {LOCK_FD}> "$LOCK_FILE"
   if ! flock -n "$LOCK_FD"; then
-    lock_conflict
+    die "已有实例运行中"
   fi
 }
 
@@ -542,8 +462,6 @@ release_lock() {
     exec {LOCK_FD}>&- || true
     LOCK_FD=""
   fi
-
-  trap - EXIT
 }
 
 log() {
@@ -561,10 +479,6 @@ die() {
 
 warn() {
   err "WARN: $*"
-}
-
-log_no_cert_records() {
-  log "未检测到证书记录"
 }
 
 command_exists() {
@@ -606,18 +520,8 @@ is_valid_email() {
 read_prompt_value() {
   local target_var="$1"
   local prompt="$2"
-  local hidden="${3:-0}"
   local input_value=""
-  local read_status=0
-
-  if [[ "$hidden" == "1" ]]; then
-    IFS= read -r -s -p "$prompt" input_value || read_status=$?
-    printf '\n'
-  else
-    IFS= read -r -p "$prompt" input_value || read_status=$?
-  fi
-
-  if ((read_status != 0)); then
+  if ! IFS= read -r -p "$prompt" input_value; then
     die "输入中断"
   fi
 
@@ -1091,12 +995,6 @@ issue_cert() {
   "$ACME_SH" "${issue_args[@]}"
 }
 
-dns_provider_exists() {
-  local provider="$1"
-  local dnsapi_dir="$ACME_HOME/dnsapi"
-  [[ -f "$dnsapi_dir/${provider}.sh" ]]
-}
-
 list_dns_providers() {
   local dnsapi_dir="$ACME_HOME/dnsapi"
   local provider_file providers=""
@@ -1125,31 +1023,23 @@ list_dns_provider_env_keys() {
 print_dns_providers_table() {
   local providers="$1"
   local columns="${2:-$DNS_PROVIDER_TABLE_COLUMNS}"
-  local min_cell_width="${3:-$DNS_PROVIDER_TABLE_CELL_WIDTH}"
-  local cell_width="$min_cell_width"
-  local provider
+  local cell_width="${3:-$DNS_PROVIDER_TABLE_CELL_WIDTH}"
+  local provider display_provider
   local idx=0
-  local provider_len=0
-  local -a provider_list=()
 
+  log "可选 DNS Provider 列表:"
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
-    provider_list+=( "$provider" )
-    provider_len=${#provider}
-    if (((provider_len + 2) > cell_width)); then
-      cell_width=$((provider_len + 2))
-    fi
-  done <<< "$providers"
-  ((${#provider_list[@]} > 0)) || return 1
-
-  log "可选 DNS Providers:"
-  for ((idx = 0; idx < ${#provider_list[@]}; idx++)); do
-    printf '%-*s' "$cell_width" "${provider_list[$idx]}"
-    if ((((idx + 1) % columns) == 0)); then
+    display_provider="$(truncate_text "$provider" "$cell_width")"
+    printf '%-*s' "$cell_width" "$display_provider"
+    idx=$((idx + 1))
+    if ((idx % columns == 0)); then
       printf '\n'
     fi
-  done
-  if ((${#provider_list[@]} % columns != 0)); then
+  done <<< "$providers"
+
+  ((idx > 0)) || return 1
+  if ((idx % columns != 0)); then
     printf '\n'
   fi
 }
@@ -1187,7 +1077,7 @@ prompt_dns_provider() {
       err "DNS Provider 格式无效: $provider_input"
       continue
     fi
-    if [[ -d "$ACME_HOME/dnsapi" ]] && ! dns_provider_exists "$provider_input"; then
+    if [[ -d "$ACME_HOME/dnsapi" && ! -f "$ACME_HOME/dnsapi/${provider_input}.sh" ]]; then
       err "未找到 DNS Provider: $provider_input"
       continue
     fi
@@ -1197,27 +1087,25 @@ prompt_dns_provider() {
 }
 
 prompt_dns_api_env_vars() {
-  local refresh_credentials input_env_vars provider_env_keys provider_env_keys_inline
-
-  if [[ -n "$DNS_API_ENV_VARS" ]]; then
-    prompt_yes_no_with_default refresh_credentials "检测到 DNS 凭据缓存, 是否重新输入 [y/N]: " "0"
-    if [[ "$refresh_credentials" != "1" ]]; then
-      return
-    fi
-  fi
-
-  provider_env_keys=""
-  provider_env_keys_inline=""
+  local input_env_vars provider_env_keys="" provider_env_keys_inline="" prompt
   if provider_env_keys="$(list_dns_provider_env_keys "$DNS_PROVIDER")"; then
     provider_env_keys_inline="${provider_env_keys//$'\n'/, }"
     provider_env_keys_inline="${provider_env_keys_inline%, }"
     if [[ -n "$provider_env_keys_inline" ]]; then
-      log "当前 Provider Key: $provider_env_keys_inline"
+      log "当前 DNS 环境变量 Key: $provider_env_keys_inline"
     fi
   fi
 
+  prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
+  if [[ -n "$DNS_API_ENV_VARS" ]]; then
+    prompt="请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 回车沿用缓存, 文档: $DNS_API_DOC_URL): "
+  fi
+
   while true; do
-    read_prompt_value input_env_vars "请输入 DNS 环境变量 (KEY=VALUE, 空格分隔, 文档: $DNS_API_DOC_URL): "
+    read_prompt_value input_env_vars "$prompt"
+    if [[ -z "$input_env_vars" && -n "$DNS_API_ENV_VARS" ]]; then
+      return
+    fi
     if validate_dns_api_env_vars "$input_env_vars"; then
       DNS_API_ENV_VARS="$input_env_vars"
       return
@@ -1296,18 +1184,14 @@ install_cert_to_dir() {
   run_or_error "证书文件权限设置失败: $cert_dir" chmod 644 "$cert_dir/fullchain.cer" "$cert_dir/cert.cer" "$cert_dir/ca.cer" || return 1
 }
 
-fetch_cert_list_raw() {
-  "$ACME_SH" --list --listraw
-}
-
 prompt_existing_cert_domain() {
   local target_var="$1"
   local prompt="$2"
   local raw_list parsed_rows selected_domain
-  raw_list="$(fetch_cert_list_raw)" || return 1
+  raw_list="$("$ACME_SH" --list --listraw)" || return 1
   parsed_rows="$(parse_cert_list_rows "$raw_list")"
   if [[ -z "$parsed_rows" ]]; then
-    log_no_cert_records
+    log "未检测到证书记录"
     return 1
   fi
 
@@ -1473,7 +1357,7 @@ print_cert_list() {
     parsed_rows="$(parse_cert_list_rows "$raw_list")"
   fi
   if [[ -z "$parsed_rows" ]]; then
-    log_no_cert_records
+    log "未检测到证书记录"
     return 0
   fi
 
@@ -1513,7 +1397,7 @@ print_cert_list() {
 
 list_certs() {
   local raw_list
-  raw_list="$(fetch_cert_list_raw)" || return 1
+  raw_list="$("$ACME_SH" --list --listraw)" || return 1
   print_cert_list "$raw_list"
 }
 
@@ -1551,7 +1435,7 @@ update_cert() {
   resolve_existing_cert_target target_domain cert_variant "请输入需更新证书路径的域名: " || return 1
   cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   if [[ "$cert_dir" == "-" ]]; then
-    cert_dir="/etc/ssl/$target_domain"
+    cert_dir="$(default_output_dir_for_domain "$target_domain")"
   fi
   prompt_output_dir_with_default cert_dir "$cert_dir"
 
@@ -1636,13 +1520,7 @@ update_script() {
 }
 
 uninstall_script() {
-  local confirmed remove_acme_home
   local script_path
-
-  prompt_yes_no_with_default confirmed "确认卸载 ACME 客户端并删除当前脚本? [y/N]: " "0"
-  if [[ "$confirmed" != "1" ]]; then
-    return 0
-  fi
 
   if [[ ! -x "$ACME_SH" ]]; then
     warn "未找到 ACME 客户端: $ACME_SH"
@@ -1650,14 +1528,11 @@ uninstall_script() {
     warn "ACME 客户端卸载失败, 需手动处理"
   fi
 
-  prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
-  run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
-  log "缓存已清理: $CACHE_HOME"
+  run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
+  log "目录已清理: $ACME_HOME"
 
-  if [[ "$remove_acme_home" == "1" ]]; then
-    run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
-    log "ACME_HOME 已删除: $ACME_HOME"
-  fi
+  run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
+  log "目录已清理: $CACHE_HOME"
 
   resolve_script_path_or_error script_path "脚本路径解析失败, 请手动删除脚本" || return 1
 
@@ -1671,8 +1546,6 @@ uninstall_script() {
       return 1
     fi
     log "脚本已删除: $script_path"
-  else
-    log "脚本文件不存在: $script_path"
   fi
 
   release_lock
@@ -1696,15 +1569,8 @@ print_main_menu() {
   printf '\n'
 }
 
-print_usage() {
-  cat <<USAGE
-DNS API ACME 运维脚本
-USAGE
-}
-
 validate_menu_config() {
   local menu_idx handler_name label_name
-  local has_update_handler="0"
 
   if [[ "${#MENU_HANDLERS[@]}" -ne "${#MENU_LABELS[@]}" ]]; then
     die "菜单配置异常: handlers=${#MENU_HANDLERS[@]}, labels=${#MENU_LABELS[@]}"
@@ -1720,12 +1586,7 @@ validate_menu_config() {
     [[ -n "$handler_name" ]] || die "菜单配置异常: 空处理函数(index=$menu_idx)"
     [[ -n "$label_name" ]] || die "菜单配置异常: 空菜单文案(index=$menu_idx)"
     declare -F "$handler_name" >/dev/null || die "菜单配置异常: 处理函数不存在: $handler_name"
-
-    if [[ "$handler_name" == "$MENU_UPDATE_SCRIPT_HANDLER" ]]; then
-      has_update_handler="1"
-    fi
   done
-  [[ "$has_update_handler" == "1" ]] || die "菜单配置异常: 缺少升级功能入口"
 }
 
 run_menu_action() {
@@ -1762,7 +1623,7 @@ run_menu() {
 main() {
   if [[ "$#" -gt 0 ]]; then
     if [[ "$#" -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
-      print_usage
+      log "DNS API ACME 运维脚本"
       return 0
     fi
     die "不支持的参数: $*"
