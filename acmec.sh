@@ -1246,14 +1246,20 @@ list_dns_providers() {
 print_dns_providers_table() {
   local providers="$1"
   local columns="${2:-$DNS_PROVIDER_TABLE_COLUMNS}"
-  local cell_width="${3:-$DNS_PROVIDER_TABLE_CELL_WIDTH}"
+  local min_cell_width="${3:-$DNS_PROVIDER_TABLE_CELL_WIDTH}"
+  local cell_width="$min_cell_width"
   local provider
   local idx=0
+  local provider_len=0
   local -a provider_list=()
 
   while IFS= read -r provider; do
     [[ -n "$provider" ]] || continue
     provider_list+=( "$provider" )
+    provider_len=${#provider}
+    if (((provider_len + 2) > cell_width)); then
+      cell_width=$((provider_len + 2))
+    fi
   done <<< "$providers"
   ((${#provider_list[@]} > 0)) || return 1
 
