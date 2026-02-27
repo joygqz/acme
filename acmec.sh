@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.1"
+readonly SCRIPT_VERSION="v1.0.2"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACME_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -1378,12 +1378,12 @@ print_cert_list() {
     return 0
   fi
 
-  border="+---------------------------+-----------+---------------------------+----------------------+----------------------+----------------------+----------------------------+"
+  border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
   printf '\n'
   printf "%s\n" "证书清单"
   printf '\n'
   printf '%s\n' "$border"
-  printf "| %-25s | %-9s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
+  printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
     "Main_Domain" "KeyLength" "SAN_Domains" "CA" "Created" "Renew" "Install_Dir"
   printf '%s\n' "$border"
 
@@ -1391,15 +1391,15 @@ print_cert_list() {
     row_variant="$(key_type_to_variant "$key_length")"
     install_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
 
-    main_domain_fmt="$(truncate_text "$main_domain" 25)"
-    key_length_fmt="$(truncate_text "$key_length" 9)"
-    san_domains_fmt="$(truncate_text "$san_domains" 25)"
+    main_domain_fmt="$(truncate_text "$main_domain" 20)"
+    key_length_fmt="$(truncate_text "$key_length" 10)"
+    san_domains_fmt="$(truncate_text "$san_domains" 20)"
     ca_fmt="$(truncate_text "$ca" 20)"
     created_fmt="$(truncate_text "$created" 20)"
     renew_fmt="$(truncate_text "$renew" 20)"
-    install_dir_fmt="$(truncate_text "$install_dir" 26)"
+    install_dir_fmt="$(truncate_text "$install_dir" 20)"
 
-    printf "| %-25s | %-9s | %-25s | %-20s | %-20s | %-20s | %-26s |\n" \
+    printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
       "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
