@@ -29,6 +29,8 @@ readonly SCRIPT_UPDATE_MAX_TIME="25"
 readonly INSTALL_CONNECT_TIMEOUT="10"
 readonly -a MENU_HANDLERS=( "" "list_certs" "create_cert" "update_cert" "delete_cert" "update_script" "uninstall_script" )
 readonly -a MENU_LABELS=( "" "证书清单" "签发证书" "更新证书路径" "删除证书" "升级脚本" "卸载工具" )
+readonly MENU_UPDATE_SCRIPT_INDEX="5"
+readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 
 readonly ENV_HAS_EMAIL="${EMAIL+1}"
 readonly ENV_HAS_CF_KEY="${CF_Key+1}"
@@ -92,6 +94,17 @@ resolve_script_path() {
   fi
 
   printf '%s\n' "$source_path"
+}
+
+resolve_script_path_or_error() {
+  local target_var="$1"
+  local error_msg="${2:-解析脚本路径失败}"
+  local script_path
+  if ! script_path="$(resolve_script_path)"; then
+    err "$error_msg"
+    return 1
+  fi
+  printf -v "$target_var" '%s' "$script_path"
 }
 
 extract_script_version() {
@@ -1241,6 +1254,16 @@ prompt_cf_global_key_credentials() {
   CF_Token=""
 }
 
+prompt_cloudflare_credentials_by_mode() {
+  local auth_mode="$1"
+  CF_AUTH_MODE="$auth_mode"
+  if [[ "$auth_mode" == "token" ]]; then
+    prompt_cf_token_credentials
+    return
+  fi
+  prompt_cf_global_key_credentials
+}
+
 prompt_cloudflare_credentials() {
   local auth_mode="$CF_AUTH_MODE"
 
@@ -1258,14 +1281,12 @@ prompt_cloudflare_credentials() {
   esac
 
   if [[ "$auth_mode" == "token" && -n "$CF_Token" ]]; then
-    CF_AUTH_MODE="token"
-    prompt_cf_token_credentials
+    prompt_cloudflare_credentials_by_mode "token"
     return
   fi
 
   if [[ "$auth_mode" == "key" && -n "$CF_Key" && -n "$CF_Email" ]]; then
-    CF_AUTH_MODE="key"
-    prompt_cf_global_key_credentials
+    prompt_cloudflare_credentials_by_mode "key"
     return
   fi
 
@@ -1277,12 +1298,7 @@ prompt_cloudflare_credentials() {
     "1" "token" \
     "2" "key"
 
-  CF_AUTH_MODE="$auth_mode"
-  if [[ "$auth_mode" == "token" ]]; then
-    prompt_cf_token_credentials
-  else
-    prompt_cf_global_key_credentials
-  fi
+  prompt_cloudflare_credentials_by_mode "$auth_mode"
 }
 
 apply_cloudflare_credentials_env() {
@@ -1608,10 +1624,7 @@ delete_cert() {
 
 update_script() {
   local script_path script_dir tmp_file new_version
-  script_path="$(resolve_script_path)" || {
-    err "解析脚本路径失败"
-    return 1
-  }
+  resolve_script_path_or_error script_path || return 1
 
   if [[ ! -f "$script_path" ]]; then
     err "未找到脚本文件: $script_path"
@@ -1683,18 +1696,15 @@ uninstall_script() {
   fi
 
   prompt_yes_no_with_default remove_acme_home "删除 ACME_HOME 目录 ($ACME_HOME) [y/N]: " "0"
+  run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
+  log "缓存目录清理完成: $CACHE_HOME"
+
   if [[ "$remove_acme_home" == "1" ]]; then
     run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
     log "目录已删除: $ACME_HOME"
   fi
 
-  run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
-  log "缓存目录清理完成: $CACHE_HOME"
-
-  script_path="$(resolve_script_path)" || {
-    err "卸载完成，未解析到脚本路径，需手动删除"
-    return 1
-  }
+  resolve_script_path_or_error script_path "卸载完成，未解析到脚本路径，需手动删除" || return 1
 
   if [[ -f "$script_path" ]]; then
     if [[ ! -w "$script_path" ]]; then
@@ -1721,9 +1731,9 @@ print_main_menu() {
   printf '%s=== ACME 证书运维 %s ===%s\n' "$COLOR_TITLE" "$SCRIPT_VERSION" "$COLOR_RESET"
   printf '%s\n' "$REPO_URL"
   printf '\n'
-  for ((i = 1; i < ${#MENU_LABELS[@]}; i++)); do
+  for ((i = 1; i <= MENU_MAX_CHOICE; i++)); do
     label="${MENU_LABELS[$i]}"
-    if ((i == 5)) && [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
+    if ((i == MENU_UPDATE_SCRIPT_INDEX)) && [[ -n "$UPDATE_AVAILABLE_VERSION" ]]; then
       label="${label} (可用版本: $UPDATE_AVAILABLE_VERSION)"
     fi
     printf ' %s%d.%s %s\n' "$COLOR_INDEX" "$i" "$COLOR_RESET" "$label"
@@ -1737,10 +1747,21 @@ Cloudflare DNS ACME 运维脚本
 USAGE
 }
 
+validate_menu_config() {
+  if [[ "${#MENU_HANDLERS[@]}" -ne "${#MENU_LABELS[@]}" ]]; then
+    die "菜单配置异常: handlers=${#MENU_HANDLERS[@]}, labels=${#MENU_LABELS[@]}"
+  fi
+  if ((MENU_MAX_CHOICE < 1)); then
+    die "菜单配置异常: 无可用功能"
+  fi
+  if ((MENU_UPDATE_SCRIPT_INDEX < 1 || MENU_UPDATE_SCRIPT_INDEX > MENU_MAX_CHOICE)); then
+    die "菜单配置异常: 升级菜单索引越界"
+  fi
+}
+
 run_menu_action() {
   local choice="$1"
-  local max_choice choice_num
-  max_choice=$(( ${#MENU_HANDLERS[@]} - 1 ))
+  local choice_num
 
   if [[ "$choice" =~ ^[0-9]+$ ]]; then
     choice_num=$((10#$choice))
@@ -1748,23 +1769,22 @@ run_menu_action() {
     choice_num=0
   fi
 
-  if ((choice_num >= 1 && choice_num <= max_choice)); then
+  if ((choice_num >= 1 && choice_num <= MENU_MAX_CHOICE)); then
     "${MENU_HANDLERS[$choice_num]}"
     return
   fi
 
-  err "选项无效: $choice"
+  err "选项无效: $choice (范围: 1-${MENU_MAX_CHOICE})"
   return 1
 }
 
 run_menu() {
-  local choice max_choice
-  max_choice=$(( ${#MENU_HANDLERS[@]} - 1 ))
+  local choice
 
   while true; do
     print_main_menu
 
-    read_prompt_value choice "请选择 [1-${max_choice}]: "
+    read_prompt_value choice "请选择 [1-${MENU_MAX_CHOICE}]: "
     run_menu_action "$choice" || true
     save_cache_or_warn
   done
@@ -1782,6 +1802,7 @@ main() {
   require_root
   acquire_lock
   init_colors
+  validate_menu_config
   load_cache_or_warn
   detect_os
   install_deps
