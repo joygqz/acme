@@ -583,7 +583,7 @@ install_deps() {
 install_acme_sh() {
   if [[ ! -x "$ACME_SH" ]]; then
     curl_https --retry "$CURL_RETRY_COUNT" --retry-delay "$CURL_RETRY_DELAY" --connect-timeout "$INSTALL_CONNECT_TIMEOUT" "$ACME_INSTALL_URL" \
-      | sh -s -- --home "$ACME_HOME" --no-profile
+      | sh -s --home "$ACME_HOME" --no-profile
   fi
 
   if [[ ! -x "$ACME_SH" ]]; then
