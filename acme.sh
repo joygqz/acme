@@ -383,8 +383,8 @@ init_colors() {
     return
   fi
   COLOR_RESET=$'\033[0m'
-  COLOR_TITLE=$'\033[1;36m'
-  COLOR_INDEX=$'\033[1;36m'
+  COLOR_TITLE=$'\033[1;94m'
+  COLOR_INDEX=$'\033[1;94m'
   COLOR_ERROR_TEXT=$'\033[0;31m'
 }
 
@@ -1181,9 +1181,23 @@ parse_cert_list_rows() {
       main_domain = $1
       key_length = $2
       san_domains = $3
-      ca = $5
-      created = $6
-      renew = $7
+      ca = ""
+      created = ""
+      renew = ""
+
+      # acme.sh 3.1.x: Main_Domain|KeyLength|SAN_Domains|Profile|CA|Created|Renew
+      # older acme.sh: Main_Domain|KeyLength|SAN_Domains|CA|Created|Renew
+      if (NF >= 7) {
+        ca = $5
+        created = $6
+        renew = $7
+      } else if (NF >= 6) {
+        ca = $4
+        created = $5
+        renew = $6
+      } else {
+        next
+      }
 
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", main_domain)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", key_length)
@@ -1467,11 +1481,8 @@ run_menu() {
     print_main_menu
 
     read -r -p "请输入选择 [0-5]: " choice
-    if run_menu_action "$choice"; then
-      continue
-    fi
-
-    action_status=$?
+    action_status=0
+    run_menu_action "$choice" || action_status=$?
     if [[ "$action_status" -eq 2 ]]; then
       return
     fi
