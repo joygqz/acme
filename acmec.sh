@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.6"
+readonly SCRIPT_VERSION="v1.0.7"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -637,7 +637,7 @@ ensure_cron_service_running() {
   fi
 
   if ! command_exists service; then
-    warn "未检测到 systemctl/service, 跳过 ${CRON_SERVICE} 管理"
+    warn "未找到 systemctl/service, 跳过 ${CRON_SERVICE} 管理"
     return
   fi
 
@@ -1469,7 +1469,7 @@ create_cert() {
 
 redeploy_cert() {
   local target_domain cert_variant cert_dir
-  resolve_existing_cert_target target_domain cert_variant "待重新部署证书的域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待重新部署的证书域名: " || return 1
   cert_dir="$(get_cert_install_dir "$target_domain" "$cert_variant")"
   if [[ "$cert_dir" == "-" ]]; then
     cert_dir="$(default_output_dir_for_domain "$target_domain")"
@@ -1485,7 +1485,7 @@ delete_cert() {
   local target_domain cert_variant acme_dir
   local -a remove_args=()
 
-  resolve_existing_cert_target target_domain cert_variant "待删除证书域名: " || return 1
+  resolve_existing_cert_target target_domain cert_variant "待删除的证书域名: " || return 1
 
   remove_args=( --remove --domain "$target_domain" )
   if is_ecc_variant "$cert_variant"; then
@@ -1568,7 +1568,7 @@ uninstall_script() {
     warn "ACME 客户端卸载失败, 请手动处理"
   fi
 
-  run_or_error "目录删除失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
+  run_or_error "目录清理失败: $ACME_HOME" remove_dir_recursively_if_exists "$ACME_HOME" || return 1
   log "目录清理完成: $ACME_HOME"
 
   run_or_error "缓存目录清理失败: $CACHE_HOME" remove_dir_recursively_if_exists "$CACHE_HOME" || return 1
