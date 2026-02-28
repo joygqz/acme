@@ -956,6 +956,7 @@ normalize_issue_options() {
 }
 
 prompt_issue_options() {
+  local lock_force_renew="${1:-0}"
   local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
   local force_renew_prompt="是否强制重签 [y/N]: "
 
@@ -988,7 +989,11 @@ prompt_issue_options() {
   fi
 
   prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
-  prompt_yes_no_with_default ISSUE_FORCE_RENEW "$force_renew_prompt" "$ISSUE_FORCE_RENEW"
+  if [[ "$lock_force_renew" == "1" ]]; then
+    ISSUE_FORCE_RENEW="1"
+  else
+    prompt_yes_no_with_default ISSUE_FORCE_RENEW "$force_renew_prompt" "$ISSUE_FORCE_RENEW"
+  fi
 }
 
 issue_cert() {
@@ -1428,16 +1433,22 @@ list_certs() {
 }
 
 create_cert() {
-  local cert_variant cert_dir default_output_dir
+  local cert_variant cert_dir default_output_dir domain_exists="0" force_confirmed="0" operation_name="证书申请"
   DOMAIN="$(prompt_domain_value "域名 (示例: example.com): ")"
 
   if cert_domain_exists "$DOMAIN"; then
-    err "证书已存在: $DOMAIN"
-    return 1
+    domain_exists="1"
+    operation_name="证书重签"
+    prompt_yes_no_with_default force_confirmed "证书已存在, 是否强制重签 [y/N]: " "0"
+    if [[ "$force_confirmed" != "1" ]]; then
+      log "已取消操作"
+      return 0
+    fi
+    ISSUE_FORCE_RENEW="1"
   fi
 
   prompt_dns_credentials
-  prompt_issue_options
+  prompt_issue_options "$domain_exists"
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
@@ -1447,13 +1458,13 @@ create_cert() {
   if ! issue_cert; then
     cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
     remove_dir_recursively_if_exists "$cert_dir"
-    err "证书申请失败"
+    err "${operation_name}失败"
     return 1
   fi
   run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
-  log "证书申请完成: $DOMAIN -> $OUTPUT_DIR"
+  log "${operation_name}完成: $DOMAIN -> $OUTPUT_DIR"
 }
 
 redeploy_cert() {
