@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.8"
+readonly SCRIPT_VERSION="v1.0.9"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -1100,16 +1100,19 @@ prompt_dns_provider() {
 
 prompt_dns_api_env_vars() {
   local dns_env_input provider_key_hints="" prompt use_cached_env="1"
-  local has_cached_dns_env="0" has_cli_dns_env="0"
+  local has_current_dns_env="0" has_cli_dns_env="0" allow_empty_keep_current="0"
 
   if [[ -n "$DNS_API_ENV_VARS" ]]; then
-    has_cached_dns_env="1"
+    has_current_dns_env="1"
   fi
   if [[ -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
     has_cli_dns_env="1"
   fi
+  if [[ "$has_current_dns_env" == "1" && "$has_cli_dns_env" == "1" ]]; then
+    allow_empty_keep_current="1"
+  fi
 
-  if [[ "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "0" ]]; then
+  if [[ "$has_current_dns_env" == "1" && "$has_cli_dns_env" == "0" ]]; then
     prompt_yes_no_with_default \
       use_cached_env \
       "检测到 $DNS_PROVIDER 缓存凭据, 是否使用 [Y/n]: " \
@@ -1129,13 +1132,13 @@ prompt_dns_api_env_vars() {
   fi
 
   prompt="DNS 凭据 (KEY=VALUE, 空格分隔): "
-  if [[ "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "1" ]]; then
+  if [[ "$allow_empty_keep_current" == "1" ]]; then
     prompt="DNS 凭据 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
   fi
 
   while true; do
     read_prompt_value dns_env_input "$prompt"
-    if [[ -z "$dns_env_input" && "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "1" ]]; then
+    if [[ -z "$dns_env_input" && "$allow_empty_keep_current" == "1" ]]; then
       return
     fi
     if validate_dns_api_env_vars "$dns_env_input"; then
@@ -1344,6 +1347,7 @@ parse_cert_list_rows() {
       main_domain = trim($1)
       key_length = trim($2)
       san_domains = trim($3)
+      profile = ""
       ca = ""
       created = ""
       renew = ""
@@ -1351,10 +1355,12 @@ parse_cert_list_rows() {
       # acme.sh 3.1.x: Main_Domain|KeyLength|SAN_Domains|Profile|CA|Created|Renew
       # older acme.sh: Main_Domain|KeyLength|SAN_Domains|CA|Created|Renew
       if (NF >= 7) {
+        profile = $4
         ca = $5
         created = $6
         renew = $7
       } else if (NF >= 6) {
+        profile = "-"
         ca = $4
         created = $5
         renew = $6
@@ -1362,6 +1368,7 @@ parse_cert_list_rows() {
         next
       }
 
+      profile = trim(profile)
       ca = trim(ca)
       created = trim(created)
       renew = trim(renew)
@@ -1369,12 +1376,13 @@ parse_cert_list_rows() {
       gsub(/"/, "", key_length)
       if (key_length == "") key_length = "-"
       if (san_domains == "no" || san_domains == "") san_domains = "-"
+      if (profile == "") profile = "-"
       if (ca == "") ca = "-"
       if (created == "") created = "-"
       if (renew == "") renew = "-"
 
       if (main_domain != "") {
-        printf "%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, ca, created, renew
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, profile, ca, created, renew
       }
     }
   '
@@ -1383,9 +1391,9 @@ parse_cert_list_rows() {
 print_cert_list() {
   local cert_list_raw="$1"
   local cert_rows="${2:-}"
-  local border row_variant
-  local main_domain key_length san_domains ca created renew install_dir
-  local main_domain_fmt key_length_fmt san_domains_fmt ca_fmt created_fmt renew_fmt install_dir_fmt
+  local border row_variant deploy_dir
+  local main_domain key_length san_domains profile ca created renew
+  local main_domain_fmt key_length_fmt san_domains_fmt profile_fmt ca_fmt created_fmt renew_fmt deploy_dir_fmt
   if [[ -z "$cert_rows" ]]; then
     cert_rows="$(parse_cert_list_rows "$cert_list_raw")"
   fi
@@ -1394,32 +1402,33 @@ print_cert_list() {
     return 0
   fi
 
-  border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
+  border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
   printf '%s\n' "$border"
-  printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
-    "Main_Domain" "KeyLength" "SAN_Domains" "CA" "Created" "Renew" "Install_Dir"
+  printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
+    "Main_Domain" "KeyLength" "SAN_Domains" "Profile" "CA" "Created" "Renew" "Deploy_Dir"
   printf '%s\n' "$border"
 
-  while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
+  while IFS=$'\t' read -r main_domain key_length san_domains profile ca created renew; do
     row_variant="$(key_type_to_variant "$key_length")"
-    install_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
-
+    deploy_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
     main_domain_fmt="$(truncate_text "$main_domain" 20)"
     key_length_fmt="$(truncate_text "$key_length" 10)"
     san_domains_fmt="$(truncate_text "$san_domains" 20)"
+    profile_fmt="$(truncate_text "$profile" 20)"
     ca_fmt="$(truncate_text "$ca" 20)"
     created_fmt="$(truncate_text "$created" 20)"
     renew_fmt="$(truncate_text "$renew" 20)"
-    install_dir_fmt="$(truncate_text "$install_dir" 20)"
+    deploy_dir_fmt="$(truncate_text "$deploy_dir" 20)"
 
-    printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
+    printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
       "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
+      "$profile_fmt" \
       "$ca_fmt" \
       "$created_fmt" \
       "$renew_fmt" \
-      "$install_dir_fmt"
+      "$deploy_dir_fmt"
   done <<< "$cert_rows"
 
   printf '%s\n' "$border"
@@ -1432,7 +1441,7 @@ list_certs() {
 }
 
 create_cert() {
-  local cert_variant cert_dir default_output_dir force_confirmed="0" operation_name="证书申请" had_existing_cert="0"
+  local cert_variant cert_dir default_output_dir force_confirmed="0" operation_name="证书申请" had_existing_cert="0" issue_failed="0"
   DOMAIN="$(prompt_domain_value "域名 (示例: example.com): ")"
   ISSUE_FORCE_RENEW="0"
 
@@ -1456,7 +1465,10 @@ create_cert() {
   prompt_output_dir_with_default OUTPUT_DIR "$default_output_dir"
   apply_dns_credentials_env
   if ! issue_cert; then
-    clear_applied_dns_api_env
+    issue_failed="1"
+  fi
+  clear_applied_dns_api_env
+  if [[ "$issue_failed" == "1" ]]; then
     if [[ "$had_existing_cert" != "1" ]]; then
       cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
       remove_dir_recursively_if_exists "$cert_dir"
@@ -1464,7 +1476,6 @@ create_cert() {
     err "${operation_name}失败"
     return 1
   fi
-  clear_applied_dns_api_env
   run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
