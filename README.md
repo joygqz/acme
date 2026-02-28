@@ -1,10 +1,10 @@
 # ACME CertOps
 
-ACME 证书管理脚本
+交互式 ACME 证书管理脚本
 
-## DNS Providers
+## DNS Provider 参考
 
-https://go-acme.github.io/lego/dns/
+https://github.com/acmesh-official/acme.sh/wiki/dnsapi
 
 ## 快速开始
 
@@ -16,4 +16,18 @@ curl -fsSL https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh -o acmec.
 
 ```bash
 ./acmec.sh
+```
+
+## Cloudflare 凭据示例
+
+```bash
+DNS Provider (默认: dns_cf): dns_cf
+
+# 账号邮箱 + Global API Key
+DNS 凭据 (KEY=VALUE, 空格分隔): CF_Email=xxx CF_Key=xxx
+
+# 或
+
+# API Token
+DNS 凭据 (KEY=VALUE, 空格分隔): CF_Token=xxx
 ```

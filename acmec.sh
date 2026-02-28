@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.7"
+readonly SCRIPT_VERSION="v1.0.8"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -475,6 +475,15 @@ release_lock() {
     exec {LOCK_FILE_FD}>&- || true
     LOCK_FILE_FD=""
   fi
+}
+
+cleanup_runtime_state() {
+  clear_applied_dns_api_env
+  release_lock
+}
+
+setup_runtime_traps() {
+  trap cleanup_runtime_state EXIT
 }
 
 log() {
@@ -945,15 +954,9 @@ normalize_issue_options() {
     0|1) ;;
     *) ISSUE_INCLUDE_WILDCARD="0" ;;
   esac
-
-  case "$ISSUE_FORCE_RENEW" in
-    0|1) ;;
-    *) ISSUE_FORCE_RENEW="0" ;;
-  esac
 }
 
 prompt_issue_options() {
-  local lock_force_renew="${1:-0}"
   local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
 
   normalize_issue_options
@@ -982,11 +985,6 @@ prompt_issue_options() {
   fi
 
   prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
-  if [[ "$lock_force_renew" == "1" ]]; then
-    ISSUE_FORCE_RENEW="1"
-  else
-    ISSUE_FORCE_RENEW="0"
-  fi
 }
 
 issue_cert() {
@@ -1102,11 +1100,19 @@ prompt_dns_provider() {
 
 prompt_dns_api_env_vars() {
   local dns_env_input provider_key_hints="" prompt use_cached_env="1"
+  local has_cached_dns_env="0" has_cli_dns_env="0"
 
-  if [[ -n "$DNS_API_ENV_VARS" && -z "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+  if [[ -n "$DNS_API_ENV_VARS" ]]; then
+    has_cached_dns_env="1"
+  fi
+  if [[ -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+    has_cli_dns_env="1"
+  fi
+
+  if [[ "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "0" ]]; then
     prompt_yes_no_with_default \
       use_cached_env \
-      "检测到 $DNS_PROVIDER 缓存, 是否使用 [Y/n]: " \
+      "检测到 $DNS_PROVIDER 缓存凭据, 是否使用 [Y/n]: " \
       "1"
     if [[ "$use_cached_env" == "1" ]]; then
       return
@@ -1119,17 +1125,17 @@ prompt_dns_api_env_vars() {
   fi
 
   if [[ -n "$provider_key_hints" ]]; then
-    log "可用 DNS 凭据 Key: $provider_key_hints"
+    log "可用 DNS 凭据变量: $provider_key_hints"
   fi
 
   prompt="DNS 凭据 (KEY=VALUE, 空格分隔): "
-  if [[ -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+  if [[ "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "1" ]]; then
     prompt="DNS 凭据 (KEY=VALUE, 空格分隔, 留空沿用当前值): "
   fi
 
   while true; do
     read_prompt_value dns_env_input "$prompt"
-    if [[ -z "$dns_env_input" && -n "$DNS_API_ENV_VARS" && -n "$ENV_HAS_DNS_API_ENV_VARS" ]]; then
+    if [[ -z "$dns_env_input" && "$has_cached_dns_env" == "1" && "$has_cli_dns_env" == "1" ]]; then
       return
     fi
     if validate_dns_api_env_vars "$dns_env_input"; then
@@ -1137,7 +1143,7 @@ prompt_dns_api_env_vars() {
       return
     fi
     if [[ -n "$provider_key_hints" ]]; then
-      err "凭据格式无效, 需使用 KEY=VALUE, 可用 Key: $provider_key_hints"
+      err "凭据格式无效, 需使用 KEY=VALUE, 可用变量: $provider_key_hints"
     else
       err "凭据格式无效, 请输入 KEY=VALUE"
     fi
@@ -1163,7 +1169,7 @@ clear_applied_dns_api_env() {
     return 0
   }
   for env_key in "${env_keys[@]}"; do
-    export "$env_key="
+    unset "$env_key" >/dev/null 2>&1 || true
   done
   DNS_API_APPLIED_KEYS=""
 }
@@ -1426,11 +1432,12 @@ list_certs() {
 }
 
 create_cert() {
-  local cert_variant cert_dir default_output_dir domain_exists="0" force_confirmed="0" operation_name="证书申请"
+  local cert_variant cert_dir default_output_dir force_confirmed="0" operation_name="证书申请" had_existing_cert="0"
   DOMAIN="$(prompt_domain_value "域名 (示例: example.com): ")"
+  ISSUE_FORCE_RENEW="0"
 
   if cert_domain_exists "$DOMAIN"; then
-    domain_exists="1"
+    had_existing_cert="1"
     operation_name="证书重签"
     prompt_yes_no_with_default force_confirmed "证书已存在, 是否强制重签 [y/N]: " "0"
     if [[ "$force_confirmed" != "1" ]]; then
@@ -1441,7 +1448,7 @@ create_cert() {
   fi
 
   prompt_dns_credentials
-  prompt_issue_options "$domain_exists"
+  prompt_issue_options
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
@@ -1449,11 +1456,15 @@ create_cert() {
   prompt_output_dir_with_default OUTPUT_DIR "$default_output_dir"
   apply_dns_credentials_env
   if ! issue_cert; then
-    cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
-    remove_dir_recursively_if_exists "$cert_dir"
+    clear_applied_dns_api_env
+    if [[ "$had_existing_cert" != "1" ]]; then
+      cert_dir="$(get_cert_dir_by_variant "$DOMAIN" "$cert_variant")"
+      remove_dir_recursively_if_exists "$cert_dir"
+    fi
     err "${operation_name}失败"
     return 1
   fi
+  clear_applied_dns_api_env
   run_or_error "证书部署失败" install_cert_to_dir "$DOMAIN" "$OUTPUT_DIR" "$cert_variant" || return 1
   remember_deploy_base_dir "$DOMAIN" "$OUTPUT_DIR"
 
@@ -1581,7 +1592,6 @@ uninstall_script() {
     log "脚本删除完成: $script_path"
   fi
 
-  release_lock
   exit 0
 }
 
@@ -1669,6 +1679,7 @@ main() {
 
   require_root
   acquire_lock
+  setup_runtime_traps
   validate_menu_config
   load_cache_or_warn
   detect_os
