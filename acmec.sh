@@ -36,7 +36,6 @@ readonly ENV_HAS_EMAIL="${EMAIL+1}"
 readonly ENV_HAS_ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE+1}"
 readonly ENV_HAS_ISSUE_CA_SERVER="${ISSUE_CA_SERVER+1}"
 readonly ENV_HAS_ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD+1}"
-readonly ENV_HAS_ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW+1}"
 readonly ENV_HAS_DNS_PROVIDER="${DNS_PROVIDER+1}"
 readonly ENV_HAS_DNS_API_ENV_VARS="${DNS_API_ENV_VARS+1}"
 readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
@@ -47,7 +46,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-}"
 ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE:-$DEFAULT_KEY_TYPE}"
 ISSUE_CA_SERVER="${ISSUE_CA_SERVER:-$DEFAULT_CA_SERVER}"
 ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD:-0}"
-ISSUE_FORCE_RENEW="${ISSUE_FORCE_RENEW:-0}"
+ISSUE_FORCE_RENEW="0"
 DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
 DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/etc/ssl}"
@@ -326,7 +325,6 @@ load_cached_preferences() {
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_KEY_TYPE" "ISSUE_KEY_TYPE" "$ENV_HAS_ISSUE_KEY_TYPE"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_CA_SERVER" "ISSUE_CA_SERVER" "$ENV_HAS_ISSUE_CA_SERVER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_INCLUDE_WILDCARD" "ISSUE_INCLUDE_WILDCARD" "$ENV_HAS_ISSUE_INCLUDE_WILDCARD"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_FORCE_RENEW" "ISSUE_FORCE_RENEW" "$ENV_HAS_ISSUE_FORCE_RENEW"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DNS_PROVIDER" "DNS_PROVIDER" "$ENV_HAS_DNS_PROVIDER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
 }
@@ -393,7 +391,6 @@ save_cached_preferences() {
     "ISSUE_KEY_TYPE" "$ISSUE_KEY_TYPE" \
     "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
     "ISSUE_INCLUDE_WILDCARD" "$ISSUE_INCLUDE_WILDCARD" \
-    "ISSUE_FORCE_RENEW" "$ISSUE_FORCE_RENEW" \
     "DNS_PROVIDER" "$DNS_PROVIDER" \
     "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR"
 }
@@ -958,7 +955,6 @@ normalize_issue_options() {
 prompt_issue_options() {
   local lock_force_renew="${1:-0}"
   local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
-  local force_renew_prompt="是否强制重签 [y/N]: "
 
   normalize_issue_options
 
@@ -984,15 +980,12 @@ prompt_issue_options() {
   if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
     wildcard_prompt="是否签发泛域名 *.$DOMAIN [Y/n]: "
   fi
-  if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
-    force_renew_prompt="是否强制重签 [Y/n]: "
-  fi
 
   prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
   if [[ "$lock_force_renew" == "1" ]]; then
     ISSUE_FORCE_RENEW="1"
   else
-    prompt_yes_no_with_default ISSUE_FORCE_RENEW "$force_renew_prompt" "$ISSUE_FORCE_RENEW"
+    ISSUE_FORCE_RENEW="0"
   fi
 }
 
