@@ -1,6 +1,4 @@
-# ACME CertOps
-
-交互式 ACME 证书管理脚本
+# ACME 证书管理脚本
 
 ## DNS Provider 参考
 
