@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.10"
+readonly SCRIPT_VERSION="v1.0.11"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -67,7 +67,7 @@ curl_script_raw_retry() {
 
 resolve_script_path() {
   local source_path="${BASH_SOURCE[0]}"
-  local source_dir source_name
+  local source_dir="" source_name=""
   if [[ -z "$source_path" ]]; then
     return 1
   fi
@@ -84,7 +84,7 @@ resolve_script_path() {
 resolve_script_path_or_error() {
   local target_var="$1"
   local error_msg="${2:-脚本路径解析失败}"
-  local resolved_path
+  local resolved_path=""
   if ! resolved_path="$(resolve_script_path)"; then
     err "$error_msg"
     return 1
@@ -136,7 +136,7 @@ parse_semver() {
 }
 
 fetch_remote_script_version() {
-  local remote_version
+  local remote_version=""
   if ! remote_version="$(curl_script_raw_retry --connect-timeout "$SCRIPT_CHECK_CONNECT_TIMEOUT" --max-time "$SCRIPT_CHECK_MAX_TIME" 2>/dev/null | extract_script_version)"; then
     return 1
   fi
@@ -170,7 +170,7 @@ is_version_newer() {
 }
 
 check_script_upgrade() {
-  local remote_version
+  local remote_version=""
   AVAILABLE_SCRIPT_VERSION=""
 
   if ! remote_version="$(fetch_remote_script_version)"; then
@@ -272,7 +272,7 @@ load_cache_entry_into_var() {
   local key="$2"
   local target_var="$3"
   local skip_if_env="${4:-}"
-  local value
+  local value=""
 
   if [[ -n "$skip_if_env" ]]; then
     return
@@ -708,7 +708,7 @@ install_acme_sh() {
 
 ensure_default_ca() {
   local account_conf="$ACME_HOME/account.conf"
-  local current_ca expected_ca
+  local current_ca="" expected_ca=""
   if [[ -f "$account_conf" ]]; then
     current_ca="$(read_conf_value "$account_conf" "DEFAULT_ACME_SERVER")"
     current_ca="$(trim_outer_quotes "$current_ca")"
