@@ -11,7 +11,7 @@ readonly ACME_HOME="${ACME_HOME:-$DEFAULT_ACME_HOME}"
 readonly ACME_INSTALL_URL="https://get.acme.sh"
 readonly REPO_URL="https://github.com/joygqz/acme"
 readonly SCRIPT_RAW_URL="https://raw.githubusercontent.com/joygqz/acme/main/acmec.sh"
-readonly SCRIPT_VERSION="v1.0.9"
+readonly SCRIPT_VERSION="v1.0.10"
 readonly DEFAULT_CACHE_HOME="/root/.acmec.sh"
 readonly CACHE_HOME="${ACMEC_CACHE_HOME:-$DEFAULT_CACHE_HOME}"
 readonly CACHE_PREFS_FILE="$CACHE_HOME/preferences.tsv"
@@ -576,16 +576,18 @@ require_root() {
 }
 
 detect_os() {
+  local os_release="/etc/os-release"
   local os_id os_like
-  if [[ ! -f /etc/os-release ]]; then
+  if [[ ! -f "$os_release" ]]; then
     die "系统识别失败: 缺少文件 /etc/os-release"
   fi
 
-  # shellcheck disable=SC1091
-  source /etc/os-release
-
-  os_id="${ID:-}"
-  os_like="${ID_LIKE:-}"
+  os_id="$(read_conf_value "$os_release" "ID" 2>/dev/null || true)"
+  os_like="$(read_conf_value "$os_release" "ID_LIKE" 2>/dev/null || true)"
+  os_id="$(trim_outer_quotes "$os_id")"
+  os_like="$(trim_outer_quotes "$os_like")"
+  os_id="${os_id,,}"
+  os_like="${os_like,,}"
 
   if [[ "$os_id" =~ (ubuntu|debian) ]] || [[ "$os_like" =~ (debian) ]]; then
     PKG_MANAGER="apt"
@@ -1347,28 +1349,22 @@ parse_cert_list_rows() {
       main_domain = trim($1)
       key_length = trim($2)
       san_domains = trim($3)
-      profile = ""
       ca = ""
       created = ""
       renew = ""
 
-      # acme.sh 3.1.x: Main_Domain|KeyLength|SAN_Domains|Profile|CA|Created|Renew
-      # older acme.sh: Main_Domain|KeyLength|SAN_Domains|CA|Created|Renew
       if (NF >= 7) {
-        profile = $4
-        ca = $5
-        created = $6
-        renew = $7
+        ca_field = 5
       } else if (NF >= 6) {
-        profile = "-"
-        ca = $4
-        created = $5
-        renew = $6
+        ca_field = 4
       } else {
         next
       }
 
-      profile = trim(profile)
+      ca = $(ca_field)
+      created = $(ca_field + 1)
+      renew = $(ca_field + 2)
+
       ca = trim(ca)
       created = trim(created)
       renew = trim(renew)
@@ -1376,13 +1372,12 @@ parse_cert_list_rows() {
       gsub(/"/, "", key_length)
       if (key_length == "") key_length = "-"
       if (san_domains == "no" || san_domains == "") san_domains = "-"
-      if (profile == "") profile = "-"
       if (ca == "") ca = "-"
       if (created == "") created = "-"
       if (renew == "") renew = "-"
 
       if (main_domain != "") {
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, profile, ca, created, renew
+        printf "%s\t%s\t%s\t%s\t%s\t%s\n", main_domain, key_length, san_domains, ca, created, renew
       }
     }
   '
@@ -1392,8 +1387,8 @@ print_cert_list() {
   local cert_list_raw="$1"
   local cert_rows="${2:-}"
   local border row_variant deploy_dir
-  local main_domain key_length san_domains profile ca created renew
-  local main_domain_fmt key_length_fmt san_domains_fmt profile_fmt ca_fmt created_fmt renew_fmt deploy_dir_fmt
+  local main_domain key_length san_domains ca created renew
+  local main_domain_fmt key_length_fmt san_domains_fmt ca_fmt created_fmt renew_fmt deploy_dir_fmt
   if [[ -z "$cert_rows" ]]; then
     cert_rows="$(parse_cert_list_rows "$cert_list_raw")"
   fi
@@ -1402,29 +1397,27 @@ print_cert_list() {
     return 0
   fi
 
-  border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
+  border="+----------------------+------------+----------------------+----------------------+----------------------+----------------------+----------------------+"
   printf '%s\n' "$border"
-  printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
-    "Main_Domain" "KeyLength" "SAN_Domains" "Profile" "CA" "Created" "Renew" "Deploy_Dir"
+  printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
+    "Main_Domain" "KeyLength" "SAN_Domains" "CA" "Created" "Renew" "Deploy_Dir"
   printf '%s\n' "$border"
 
-  while IFS=$'\t' read -r main_domain key_length san_domains profile ca created renew; do
+  while IFS=$'\t' read -r main_domain key_length san_domains ca created renew; do
     row_variant="$(key_type_to_variant "$key_length")"
     deploy_dir="$(get_cert_install_dir "$main_domain" "$row_variant")"
     main_domain_fmt="$(truncate_text "$main_domain" 20)"
     key_length_fmt="$(truncate_text "$key_length" 10)"
     san_domains_fmt="$(truncate_text "$san_domains" 20)"
-    profile_fmt="$(truncate_text "$profile" 20)"
     ca_fmt="$(truncate_text "$ca" 20)"
     created_fmt="$(truncate_text "$created" 20)"
     renew_fmt="$(truncate_text "$renew" 20)"
     deploy_dir_fmt="$(truncate_text "$deploy_dir" 20)"
 
-    printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
+    printf "| %-20s | %-10s | %-20s | %-20s | %-20s | %-20s | %-20s |\n" \
       "$main_domain_fmt" \
       "$key_length_fmt" \
       "$san_domains_fmt" \
-      "$profile_fmt" \
       "$ca_fmt" \
       "$created_fmt" \
       "$renew_fmt" \
