@@ -1037,6 +1037,11 @@ issue_cert() {
     local -a extra_domain_arr=()
     read -r -a extra_domain_arr <<< "$EXTRA_DOMAINS"
     for extra_domain in "${extra_domain_arr[@]}"; do
+      local prefix="${extra_domain%.$DOMAIN}"
+      if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" && "$prefix.$DOMAIN" == "$extra_domain" && "$prefix" != *"."* ]]; then
+        warn "附加域名 $extra_domain 已被通配符 *.$DOMAIN 覆盖, 已跳过"
+        continue
+      fi
       issue_args+=( --domain "$extra_domain" )
     done
   fi
