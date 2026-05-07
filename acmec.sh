@@ -41,6 +41,7 @@ readonly ENV_HAS_DNS_API_ENV_VARS="${DNS_API_ENV_VARS+1}"
 readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
 
 DOMAIN="${DOMAIN:-}"
+EXTRA_DOMAINS="${EXTRA_DOMAINS:-}"
 EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE:-$DEFAULT_KEY_TYPE}"
@@ -989,7 +990,41 @@ prompt_issue_options() {
   prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
 }
 
+prompt_extra_domains() {
+  local input_value domain valid
+  local -a domains=()
+
+  while true; do
+    read_prompt_value input_value "附加 SAN 域名 (可选, 空格分隔, 直接回车跳过): "
+    if [[ -z "$input_value" ]]; then
+      EXTRA_DOMAINS=""
+      return
+    fi
+
+    read -r -a domains <<< "$input_value"
+    valid=1
+    for domain in "${domains[@]}"; do
+      if ! is_valid_domain "$domain"; then
+        err "域名格式无效: $domain"
+        valid=0
+        break
+      fi
+      if [[ "$domain" == "$DOMAIN" ]]; then
+        err "附加域名不能与主域名相同: $domain"
+        valid=0
+        break
+      fi
+    done
+
+    if [[ "$valid" == "1" ]]; then
+      EXTRA_DOMAINS="$input_value"
+      return
+    fi
+  done
+}
+
 issue_cert() {
+  local extra_domain
   local -a issue_args=(
     --issue
     --keylength "$ISSUE_KEY_TYPE"
@@ -997,6 +1032,14 @@ issue_cert() {
     --domain "$DOMAIN"
     --dns "$DNS_PROVIDER"
   )
+
+  if [[ -n "$EXTRA_DOMAINS" ]]; then
+    local -a extra_domain_arr=()
+    read -r -a extra_domain_arr <<< "$EXTRA_DOMAINS"
+    for extra_domain in "${extra_domain_arr[@]}"; do
+      issue_args+=( --domain "$extra_domain" )
+    done
+  fi
 
   if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
     issue_args+=( --domain "*.$DOMAIN" )
@@ -1436,6 +1479,7 @@ list_certs() {
 create_cert() {
   local cert_variant cert_dir default_output_dir force_confirmed="0" operation_name="证书申请" had_existing_cert="0" issue_failed="0"
   DOMAIN="$(prompt_domain_value "域名 (示例: example.com): ")"
+  EXTRA_DOMAINS=""
   ISSUE_FORCE_RENEW="0"
 
   if cert_domain_exists "$DOMAIN"; then
@@ -1451,6 +1495,7 @@ create_cert() {
 
   prompt_dns_credentials
   prompt_issue_options
+  prompt_extra_domains
   cert_variant="$(key_type_to_variant "$ISSUE_KEY_TYPE")"
 
   cleanup_stale_domain_dirs "$DOMAIN"
