@@ -991,17 +991,17 @@ prompt_issue_options() {
 }
 
 prompt_extra_domains() {
-  local input_value domain valid
+  local raw_input domain valid
   local -a domains=()
 
   while true; do
-    read_prompt_value input_value "附加 SAN 域名 (可选, 空格分隔, 直接回车跳过): "
-    if [[ -z "$input_value" ]]; then
+    read_prompt_value raw_input "附加 SAN 域名 (可选, 空格分隔, 直接回车跳过): "
+    if [[ -z "$raw_input" ]]; then
       EXTRA_DOMAINS=""
       return
     fi
 
-    read -r -a domains <<< "$input_value"
+    read -r -a domains <<< "$raw_input"
     valid=1
     for domain in "${domains[@]}"; do
       if ! is_valid_domain "$domain"; then
@@ -1017,7 +1017,7 @@ prompt_extra_domains() {
     done
 
     if [[ "$valid" == "1" ]]; then
-      EXTRA_DOMAINS="$input_value"
+      EXTRA_DOMAINS="$raw_input"
       return
     fi
   done
