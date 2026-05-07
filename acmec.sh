@@ -35,7 +35,6 @@ readonly MENU_MAX_CHOICE="$(( ${#MENU_HANDLERS[@]} - 1 ))"
 readonly ENV_HAS_EMAIL="${EMAIL+1}"
 readonly ENV_HAS_ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE+1}"
 readonly ENV_HAS_ISSUE_CA_SERVER="${ISSUE_CA_SERVER+1}"
-readonly ENV_HAS_ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD+1}"
 readonly ENV_HAS_DNS_PROVIDER="${DNS_PROVIDER+1}"
 readonly ENV_HAS_DNS_API_ENV_VARS="${DNS_API_ENV_VARS+1}"
 readonly ENV_HAS_DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR+1}"
@@ -46,7 +45,6 @@ EMAIL="${EMAIL:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-}"
 ISSUE_KEY_TYPE="${ISSUE_KEY_TYPE:-$DEFAULT_KEY_TYPE}"
 ISSUE_CA_SERVER="${ISSUE_CA_SERVER:-$DEFAULT_CA_SERVER}"
-ISSUE_INCLUDE_WILDCARD="${ISSUE_INCLUDE_WILDCARD:-0}"
 ISSUE_FORCE_RENEW="0"
 DNS_PROVIDER="${DNS_PROVIDER:-$DEFAULT_DNS_PROVIDER}"
 DNS_API_ENV_VARS="${DNS_API_ENV_VARS:-}"
@@ -325,7 +323,6 @@ load_cached_preferences() {
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "EMAIL" "EMAIL" "$ENV_HAS_EMAIL"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_KEY_TYPE" "ISSUE_KEY_TYPE" "$ENV_HAS_ISSUE_KEY_TYPE"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_CA_SERVER" "ISSUE_CA_SERVER" "$ENV_HAS_ISSUE_CA_SERVER"
-  load_cache_entry_into_var "$CACHE_PREFS_FILE" "ISSUE_INCLUDE_WILDCARD" "ISSUE_INCLUDE_WILDCARD" "$ENV_HAS_ISSUE_INCLUDE_WILDCARD"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DNS_PROVIDER" "DNS_PROVIDER" "$ENV_HAS_DNS_PROVIDER"
   load_cache_entry_into_var "$CACHE_PREFS_FILE" "DEPLOY_BASE_DIR" "DEPLOY_BASE_DIR" "$ENV_HAS_DEPLOY_BASE_DIR"
 }
@@ -391,7 +388,6 @@ save_cached_preferences() {
     "EMAIL" "$EMAIL" \
     "ISSUE_KEY_TYPE" "$ISSUE_KEY_TYPE" \
     "ISSUE_CA_SERVER" "$ISSUE_CA_SERVER" \
-    "ISSUE_INCLUDE_WILDCARD" "$ISSUE_INCLUDE_WILDCARD" \
     "DNS_PROVIDER" "$DNS_PROVIDER" \
     "DEPLOY_BASE_DIR" "$DEPLOY_BASE_DIR"
 }
@@ -953,15 +949,9 @@ normalize_issue_options() {
     *) ISSUE_CA_SERVER="$DEFAULT_CA_SERVER" ;;
   esac
 
-  case "$ISSUE_INCLUDE_WILDCARD" in
-    0|1) ;;
-    *) ISSUE_INCLUDE_WILDCARD="0" ;;
-  esac
 }
 
 prompt_issue_options() {
-  local wildcard_prompt="是否签发泛域名 *.$DOMAIN [y/N]: "
-
   normalize_issue_options
 
   prompt_option_with_default \
@@ -982,12 +972,6 @@ prompt_issue_options() {
     "1" "letsencrypt" \
     "2" "zerossl" \
     "3" "buypass"
-
-  if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
-    wildcard_prompt="是否签发泛域名 *.$DOMAIN [Y/n]: "
-  fi
-
-  prompt_yes_no_with_default ISSUE_INCLUDE_WILDCARD "$wildcard_prompt" "$ISSUE_INCLUDE_WILDCARD"
 }
 
 prompt_extra_domains() {
@@ -995,7 +979,7 @@ prompt_extra_domains() {
   local -a domains=()
 
   while true; do
-    read_prompt_value raw_input "附加 SAN 域名 (可选, 空格分隔, 直接回车跳过): "
+    read_prompt_value raw_input "附加域名 (可选, 支持通配符, 空格分隔, 如: *.joytun.net www.joytun.net, 直接回车跳过): "
     if [[ -z "$raw_input" ]]; then
       EXTRA_DOMAINS=""
       return
@@ -1004,7 +988,13 @@ prompt_extra_domains() {
     read -r -a domains <<< "$raw_input"
     valid=1
     for domain in "${domains[@]}"; do
-      if ! is_valid_domain "$domain"; then
+      if [[ "$domain" == \*.* ]]; then
+        if ! is_valid_domain "${domain#*.}"; then
+          err "通配符域名格式无效: $domain"
+          valid=0
+          break
+        fi
+      elif ! is_valid_domain "$domain"; then
         err "域名格式无效: $domain"
         valid=0
         break
@@ -1034,20 +1024,28 @@ issue_cert() {
   )
 
   if [[ -n "$EXTRA_DOMAINS" ]]; then
-    local -a extra_domain_arr=()
+    local -a extra_domain_arr=() wildcard_parents=()
     read -r -a extra_domain_arr <<< "$EXTRA_DOMAINS"
     for extra_domain in "${extra_domain_arr[@]}"; do
-      local prefix="${extra_domain%.$DOMAIN}"
-      if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" && "$prefix.$DOMAIN" == "$extra_domain" && "$prefix" != *"."* ]]; then
-        warn "附加域名 $extra_domain 已被通配符 *.$DOMAIN 覆盖, 已跳过"
-        continue
+      if [[ "$extra_domain" == \*.* ]]; then
+        wildcard_parents+=( "${extra_domain#*.}" )
+      fi
+    done
+    for extra_domain in "${extra_domain_arr[@]}"; do
+      if [[ "$extra_domain" != \*.* ]]; then
+        local skip=0 wc_parent
+        for wc_parent in "${wildcard_parents[@]}"; do
+          local sub_prefix="${extra_domain%.$wc_parent}"
+          if [[ "$sub_prefix.$wc_parent" == "$extra_domain" && "$sub_prefix" != *"."* ]]; then
+            warn "附加域名 $extra_domain 已被通配符 *.$wc_parent 覆盖, 已跳过"
+            skip=1
+            break
+          fi
+        done
+        [[ "$skip" == "1" ]] && continue
       fi
       issue_args+=( --domain "$extra_domain" )
     done
-  fi
-
-  if [[ "$ISSUE_INCLUDE_WILDCARD" == "1" ]]; then
-    issue_args+=( --domain "*.$DOMAIN" )
   fi
 
   if [[ "$ISSUE_FORCE_RENEW" == "1" ]]; then
